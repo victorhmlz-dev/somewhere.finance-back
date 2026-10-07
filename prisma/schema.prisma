@@ -1,0 +1,67 @@
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "esm"
+  generatedFileExtension = "ts"
+  importFileExtension    = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// An EVM address is the same on Ethereum, BNB Chain and Robinhood Chain, so a
+// wallet is identified by its address family rather than by a single chain.
+enum WalletFamily {
+  evm
+  solana
+}
+
+model User {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  // Stored in lowercase; uniqueness is therefore case-insensitive.
+  handle    String   @unique @db.VarChar(15)
+  name      String   @db.VarChar(50)
+  bio       String   @default("") @db.VarChar(160)
+  avatarUrl String?  @map("avatar_url")
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  wallets Wallet[]
+
+  @@map("users")
+}
+
+model Wallet {
+  id        String       @id @default(uuid(7)) @db.Uuid
+  userId    String       @map("user_id") @db.Uuid
+  family    WalletFamily
+  // EVM: lowercase hex with 0x prefix. Solana: base58, case-sensitive.
+  address   String       @db.VarChar(64)
+  isPrimary Boolean      @default(false) @map("is_primary")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([family, address])
+  @@index([userId])
+  @@map("wallets")
+}
+
+// One row per sign-in attempt: the exact message the wallet has to sign.
+// A challenge is valid once and only until it expires.
+model AuthChallenge {
+  id        String       @id @default(uuid(7)) @db.Uuid
+  nonce     String       @unique @db.VarChar(96)
+  family    WalletFamily
+  address   String       @db.VarChar(64)
+  message   String
+  expiresAt DateTime     @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime?    @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([family, address])
+  @@map("auth_challenges")
+}
