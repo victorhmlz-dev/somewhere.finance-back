@@ -1,8 +1,10 @@
-# Traspaso de contexto: backend de Somewhere Finance
+# Traspaso de contexto: Somewhere Finance
 
-Este documento resume una conversación previa entre Victor (el usuario) y Claude, mantenida el 2026-10-07 en el repo del front. Léelo entero antes de proponer nada: contiene el análisis del front, las decisiones ya tomadas y la única pregunta que quedó abierta.
+Actualizado el 2026-10-10. Sustituye a la versión del 2026-10-07, que se escribió antes de que existiera el backend. Léelo entero antes de proponer nada.
 
-El usuario escribe en español; respóndele en español.
+El usuario (Victor) escribe en español; respóndele en español. El copy de la interfaz va en inglés.
+
+Hay dos copias idénticas de este archivo: una en la raíz `D:\Projects\somewhere.finance\` y otra dentro de `somewhere.finance-back`. Si editas una, copia el resultado a la otra.
 
 ## 1. El producto
 
@@ -11,30 +13,82 @@ Somewhere Finance es una red social tipo X fusionada con un marketplace cripto m
 Tipos de activo:
 
 - `nft`: NFT normal.
-- `token`: token fungible, se negocia en la terminal de trading y se lanza en el launchpad.
-- `nffc`: "Non Fungible Financial Collectibles", término acuñado por el usuario. Es una canasta de acciones tokenizadas envuelta en un NFT con características únicas. Hay que modelarlo como un activo con subyacentes, no como un NFT cualquiera.
+- `token`: token fungible; se negocia en la terminal de trading y se lanza en el launchpad.
+- `nffc`: NonFungible Financial Collectibles, término acuñado por el usuario. Ver la sección 2 antes de escribir una sola palabra sobre ellos.
 
-## 2. Estado actual
+## 2. Cómo se habla de los NFFC
 
-Carpeta raíz: `D:\Projects\somewhere.finance\`
+Regla única para las tres partes del proyecto (landing, front y back).
 
-- `somewhere.finance-front`: el front. Es solo una maqueta, sin funcionalidad real.
-- `landing`: no se revisó.
-- `somewhere.finance-back`: **no existe todavía**. Es lo que toca crear.
+**Hacia fuera** (interfaz, landing, metadatos, README, mensajes de error, documentación pública de la API), un NFFC es el punto donde los NFT se encuentran con el mundo real. Frase de referencia:
 
-### El front
+> Where NFTs meet the real world.
 
-- Next.js 15 (App Router), React 19, JavaScript sin TypeScript, CSS plano con BEM, alias `@/` a la raíz.
-- No hay backend, wallet, fetch ni llamadas a cadena. Todo sale de archivos mock en `data/`.
+Se puede variar el tono poético, pero no el fondo: coleccionables digitales que llevan dentro un pedazo del mundo real.
+
+- El nombre completo se escribe "NonFungible Financial Collectibles"; el plural corto es "NFFCs".
+- No se describe como canasta de acciones, cesta, índice, fondo, cartera ni producto de inversión.
+- No se da asesoramiento financiero ni se prometen rendimientos, APY o dividendos.
+- Todo dato de demostración visible lleva la etiqueta "Illustrative data".
+
+**Hacia dentro** (modelo de datos, contratos, este documento), un NFFC es un NFT con características únicas que envuelve un conjunto de acciones tokenizadas. Por eso se modela como un activo con subyacentes y no como un NFT cualquiera. Esta descripción no sale de aquí: es para diseñar, no para comunicar.
+
+Estado de la regla en cada parte:
+
+- **Front:** ya la cumple. Solo muestra la etiqueta "NFFC" como tipo de colección, sin explicarla.
+- **Back:** todavía no tiene nada sobre NFFC.
+- **Landing:** pendiente, porque el repo local está a medio sincronizar (ver sección 3). Cuando esté al día hay que reescribir el apartado "Concepto NFFC" de `docs/SCROLLYTELLING_BRIEF.md`, que hoy lo describe como una estructura similar a un índice con activos subyacentes, y alinear la línea sobre NFFC de `CLAUDE.md` con esta sección.
+
+## 3. Estado actual
+
+Carpeta raíz: `D:\Projects\somewhere.finance\`. No es un repo; contiene tres repos independientes en `github.com/victorhmlz-dev`.
+
+### `landing`
+
+Scrollytelling WebGL. Next.js 16.3.5, React 19.2, three con React Three Fiber, zustand, JavaScript, CSS Modules.
+
+- Cinco capítulos activos: Singularity, Big Bang, Nebula, Galaxies & Chains y Universe, que cierra con el wordmark y el CTA.
+- El acto dedicado a los NFFC (ocho capítulos) está archivado, no borrado. `docs/ARCHIVED_NFFC_ACT.md` explica cómo reconectarlo.
+- Tiene reglas propias en `landing/CLAUDE.md`. La más importante: no usar Git en ese repo; lo gestiona el usuario.
+- El 2026-10-10 el repo local iba 12 commits por detrás de `origin/main` y tenía 5 archivos modificados sin commitear. El usuario iba a sincronizarlo o a clonarlo de nuevo. Comprueba su estado antes de tocarlo.
+- El CTA final enlaza a `/explore`, que no existe en la landing sino en el front.
+
+### `somewhere.finance-front`
+
+Maqueta sin funcionalidad real. Next.js 15 (App Router), React 19, JavaScript, CSS plano con BEM, alias `@/` a la raíz.
+
+- No hay backend, wallet, fetch ni llamadas a cadena. Todo sale de los mocks de `data/`.
 - Rutas: `/` (feed), `/explore`, `/collections`, `/auctions`, `/launchpad`, `/trading`, `/notifications`, `/profile`. No hay rutas dinámicas de detalle.
 - Estructura paralela por página: `components/pages/<pagina>/`, `data/pages/<pagina>/`, `hooks/pages/<pagina>/`, `styles/components/pages/<pagina>/`.
 - `lib/services/` tiene tres funciones asíncronas que devuelven mocks y que nadie importa. Es el punto natural para conectar la API.
 - `lib/blockchain/` tiene cuatro módulos (uno por cadena) que solo lanzan "not implemented yet".
-- `.env.example` define `NEXT_PUBLIC_APP_NAME`, `NEXT_PUBLIC_APP_URL` y una URL de RPC por cadena.
+- `.env.example` define el nombre y la URL de la app y una URL de RPC por cadena. No hay variable para la URL del back.
+- Botones sin acción: Connect Wallet, Post, Follow, Place Bid, Buy Now, Mint, Edit profile, comprar y vender.
 
-Botones sin acción hoy: Connect Wallet, Post, Follow, Place Bid, Buy Now, Mint, Edit profile, comprar/vender.
+### `somewhere.finance-back`
 
-## 3. Lo que el front le exige al backend
+TypeScript, NestJS 12, PostgreSQL 17 en Docker (puerto 5433), Prisma 7, Vitest, oxlint. API en `http://localhost:3001/api`. El `README.md` del repo explica la puesta en marcha y los scripts.
+
+Hecho:
+
+- Scaffold, validación de variables de entorno al arrancar, `GET /api/health`.
+- Login por firma de wallet: `POST /api/auth/challenge`, `POST /api/auth/verify`, `GET /api/auth/me`. EVM firma un mensaje EIP-4361; Solana firma el mismo formato con Ed25519. El reto caduca a los 5 minutos y sirve una sola vez. La sesión es un JWT de una semana.
+- Tablas `users`, `wallets` y `auth_challenges`. Una wallet se identifica por familia (`evm` o `solana`), no por cadena, porque una dirección EVM es la misma en Ethereum, BNB Chain y Robinhood Chain.
+- Perfiles y follows (2026-10-10): ver un perfil por handle, editar el propio, seguir y dejar de seguir, y listas paginadas de followers y following. Tabla `follows` y contadores `following_count` y `followers_count` en `users`, actualizados en la misma transacción que cada follow. Las rutas están en el `README.md`.
+- Paginación por cursor común a todas las listas (`src/common/pagination.ts`): `?limit=` y `?cursor=`, respuesta `{ items, nextCursor }`.
+- `OptionalAuthGuard` para rutas públicas cuya respuesta depende de quién pregunta.
+- Tests unitarios de la firma y del entorno; tests e2e de auth, health y users contra la base de datos real.
+
+Límites conocidos de lo hecho:
+
+- La verificación EVM solo cubre wallets normales. Las de contrato (ERC-1271) necesitan una llamada RPC y quedan para la fase on-chain.
+- No hay logout, refresco de token ni forma de vincular una segunda wallet a un usuario.
+- El avatar es solo una URL; no hay subida de imágenes.
+- No se puede borrar una cuenta. Cuando se pueda, habrá que ajustar los contadores de follows de los demás usuarios, porque el borrado en cascada no los toca.
+
+Requisitos de la máquina: Node 22.22.3 o superior para el CLI de NestJS (`npm run build`, `npm run start:dev`) y Docker Desktop en marcha para la base de datos y los tests e2e. El 2026-10-10 la máquina tenía Node 22.13.0 y el usuario iba a actualizarlo.
+
+## 4. Lo que el front le exige al backend
 
 La forma de cada entidad está en los mocks del front; úsalos como contrato de partida.
 
@@ -52,54 +106,51 @@ La forma de cada entidad está en los mocks del front; úsalos como contrato de 
 Implicaciones:
 
 - **Dos naturalezas de dato.** Lo social es propio y vive en nuestra base de datos. Lo de mercado (precios, holders, trades, balances, floor) viene de las cadenas y habrá que indexarlo o tomarlo de proveedores.
-- **Autenticación por wallet.** El único acceso que muestra el front es "Connect Wallet": login por firma de mensaje, con formatos distintos para EVM y Solana.
 - **Tiempo real.** Subastas, trades, precio y notificaciones piden WebSocket o SSE.
 - **Filtros en servidor.** Los hooks `hooks/pages/collections/useCollectionFilters.js` y `hooks/pages/auctions/useAuctionFilters.js` ya definen los parámetros: búsqueda, tipo, cadenas, rango de precio en USD, antigüedad o tiempo restante, creador, solo verificadas, y orden.
-- **Reglas del launchpad** que el front promete: liquidez gestionada por contrato, enviada al exchange de la red (Uniswap, Raydium, PancakeSwap) y bloqueada; los desarrolladores retienen como máximo el 1% del supply.
+- **Reglas del launchpad** que el front promete: liquidez gestionada por contrato, enviada al exchange de la red (Uniswap, Raydium, PancakeSwap) y bloqueada; los desarrolladores retienen como máximo el 1% del supply. Robinhood Chain no tiene exchange asignado todavía.
 
-## 4. Decisiones ya tomadas por el usuario
+## 5. Decisiones tomadas
 
-1. El backend va en un repo aparte: `D:\Projects\somewhere.finance\somewhere.finance-back`.
+1. El backend va en un repo aparte: `somewhere.finance-back`.
 2. Base de datos: PostgreSQL.
-3. Lenguaje: Java o Node. La conversación se inclinó hacia Node; no se confirmó formalmente.
+3. Lenguaje y framework: TypeScript con NestJS. La duda entre TypeScript y JavaScript quedó resuelta así.
 4. Se empieza por la parte off-chain. Lo on-chain va después.
+5. Los NFFC se comunican como indica la sección 2.
 
-## 5. Pregunta abierta: TypeScript o JavaScript
+## 6. Siguiente trabajo
 
-Es lo último que se discutió y **el usuario no ha respondido**. No asumas ninguna de las dos.
+Del primer hito quedan, en este orden:
 
-- El usuario domina mejor JavaScript y preguntó por qué TypeScript.
-- Recomendación de Claude: TypeScript con NestJS, por los errores de forma de dato (importes, direcciones, identificadores de cadena), el acceso tipado a PostgreSQL, las librerías de cadena y los refactors que vendrán con lo on-chain.
-- Alternativa si elige JavaScript: Fastify en lugar de NestJS (NestJS con JavaScript es incómodo), con validación de esquemas en cada endpoint.
-- Criterio que se le dio: TypeScript si está dispuesto a leer tipos desde el primer día; JavaScript si prefiere entender cada línea sin fricción.
+1. Posts, likes, reposts, replies y hashtags, con los feeds "Discover" y "My network".
+2. Notificaciones.
 
-Lo primero que hay que hacer es obtener esa respuesta.
+Decisiones ya acordadas para esa parte: 280 caracteres por post, contadores guardados en la fila, imágenes solo como URL, "Discover" cronológico y views contadas sin deduplicar.
 
-## 6. Primer hito propuesto (pendiente de confirmar)
+En paralelo o después, conectar el front: cliente de API en `lib/services/`, variable de entorno con la URL del back y el flujo de Connect Wallet contra `/api/auth`.
 
-1. Scaffold de `somewhere.finance-back`, con PostgreSQL en Docker y migraciones.
-2. Login por firma de wallet (EVM y Solana) con sesión por JWT.
-3. Usuarios y perfiles, follows.
-4. Posts, likes, reposts, replies y hashtags, con los feeds "Discover" y "My network".
-5. Notificaciones.
+## 7. Análisis interno de los NFFC
 
-## 7. Opinión que se dio sobre los NFFC
+Valoración que se le dio al usuario cuando la pidió. Es material interno, escrito en términos técnicos a propósito; no es copy ni base para copy.
 
-El usuario pidió una valoración de la idea. Resumen de lo que se le dijo, para no contradecirlo sin motivo:
-
-- **A favor:** tienen valor neto calculable, lo que da un suelo de precio real; unen la parte social con la de trading (un creador publica una canasta y sus seguidores la compran); encajan con la narrativa de acciones tokenizadas de Robinhood Chain.
-- **Riesgo principal, regulatorio:** una canasta de acciones es casi seguro un valor, y agruparlas se parece a un fondo. Un creador que arma canastas puede parecer un asesor de inversiones sin licencia. Se le recomendó un abogado de valores antes de escribir el contrato.
-- **Por verificar:** si las acciones tokenizadas del emisor elegido pueden ser custodiadas por un contrato de terceros. Si no, el NFFC no se puede construir como está descrito.
-- **Problema de diseño:** una canasta es naturalmente fungible; hacerla única fragmenta la liquidez, y si es redimible su precio converge al valor neto.
-- **Sugerencias:** que lo único sea la curación del creador con historial público de rendimiento; decidir pronto si es redimible; mirar ERC-6551 como base técnica.
+- **A favor:** tienen valor neto calculable, lo que da un suelo de precio real; unen la parte social con la de trading (un creador publica uno y sus seguidores lo compran); encajan con la narrativa de acciones tokenizadas de Robinhood Chain.
+- **Riesgo principal, regulatorio:** un conjunto de acciones es casi seguro un valor, y agruparlas se parece a un fondo. Un creador que las combina puede parecer un asesor de inversiones sin licencia. Se le recomendó un abogado de valores antes de escribir el contrato. La forma de comunicarlos de la sección 2 no elimina este riesgo.
+- **Por verificar:** si las acciones tokenizadas del emisor elegido pueden ser custodiadas por un contrato de terceros. Si no, el NFFC no se puede construir como está pensado.
+- **Problema de diseño:** el contenido es naturalmente fungible; hacerlo único fragmenta la liquidez, y si es redimible su precio converge al valor neto.
+- **Sugerencias:** que lo único sea la curación del creador con historial público; decidir pronto si es redimible; mirar ERC-6551 como base técnica.
 - Nada de esto bloquea el backend off-chain.
 
-## 8. Pendientes menores detectados en el front
+## 8. Pendientes menores
 
-No son parte del trabajo de backend; están aquí por si el usuario los menciona.
+Front:
 
 - Ocho componentes sin usar en `components/pages/feed/`, restos de una landing anterior: `ExploreChains`, `FeaturedNFTs`, `FinalCTA`, `HowItWorks`, `LiveAuctions`, `MarketplaceStats`, `TopCreators`, `TrendingCollections`.
 - `Footer` se importa en `app/layout.js` pero no se renderiza, y enlaza a `/creators`, que no existe.
 - Los logs de `.playwright-mcp/` están versionados en git.
 - Neon Bazaar aparece en BSC en collections y en Solana en launchpad.
 - Holders, trades y opiniones de la terminal son los mismos para cualquier token.
+
+Landing:
+
+- El tagline del cierre (`components/dom/FinalCta.jsx`) dice "Across every chains, trought all the worlds.", con erratas y distinto del tagline del brief.
+- Los logos de las siete empresas son marcas reales sin permiso confirmado; `public/logos/README.md` documenta la reserva.

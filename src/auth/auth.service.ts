@@ -8,8 +8,8 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { generateSiweNonce } from 'viem/siwe';
 import type { Env } from '../config/env.js';
-import { Prisma } from '../generated/prisma/client.js';
 import type { WalletFamily } from '../generated/prisma/enums.js';
+import { isUniqueViolation } from '../prisma/prisma-errors.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { toUserProfile } from '../users/user-profile.js';
 import { RequestChallengeDto } from './dto/request-challenge.dto.js';
@@ -23,10 +23,6 @@ import {
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const ETHEREUM_MAINNET = 1;
 const MAX_HANDLE_ATTEMPTS = 5;
-
-const isUniqueViolation = (error: unknown) =>
-  error instanceof Prisma.PrismaClientKnownRequestError &&
-  error.code === 'P2002';
 
 @Injectable()
 export class AuthService {

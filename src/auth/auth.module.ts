@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import type { Env } from '../config/env.js';
 import { AuthController } from './auth.controller.js';
-import { AuthGuard } from './auth.guard.js';
+import { AuthGuard, OptionalAuthGuard } from './auth.guard.js';
 import { AuthService } from './auth.service.js';
 
 // Global so any module can protect its routes with `AuthGuard`.
@@ -21,7 +21,7 @@ import { AuthService } from './auth.service.js';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, AuthGuard],
-  exports: [AuthGuard, JwtModule],
+  providers: [AuthService, AuthGuard, OptionalAuthGuard],
+  exports: [AuthGuard, OptionalAuthGuard, JwtModule],
 })
 export class AuthModule {}
