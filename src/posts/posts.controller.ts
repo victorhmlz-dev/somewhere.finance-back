@@ -101,18 +101,3 @@ export class PostsController {
     return this.posts.unrepost(currentUser.id, id);
   }
 }
-
-@Controller('users/:handle/posts')
-export class UserPostsController {
-  constructor(private readonly posts: PostsService) {}
-
-  @Get()
-  @UseGuards(OptionalAuthGuard)
-  list(
-    @Param('handle') handle: string,
-    @Query() query: PaginationQueryDto,
-    @CurrentUser() viewer?: AuthenticatedUser,
-  ) {
-    return this.posts.listByAuthor(handle, query, viewer?.id);
-  }
-}

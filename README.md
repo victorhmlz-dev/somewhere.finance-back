@@ -26,7 +26,7 @@ npm run start:dev        # API en http://localhost:3001/api
 | `npm run start:dev` | Arranca la API y recarga al guardar |
 | `npm run build` | Compila a `dist/` |
 | `npm test` | Tests unitarios (`src/**/*.spec.ts`) |
-| `npm run test:e2e` | Tests contra la API y la base de datos reales (`test/`) |
+| `npm run test:e2e` | Tests contra la API y la base de datos reales (`test/`), un archivo detrás de otro |
 | `npm run lint` | oxlint |
 | `npm run db:up` / `db:down` | Levanta o para PostgreSQL |
 | `npm run db:migrate` | Crea y aplica una migración a partir de los cambios en `prisma/schema.prisma` |
@@ -43,7 +43,8 @@ src/config/            Lectura y validación de variables de entorno
 src/prisma/            Conexión a la base de datos
 src/auth/              Login por firma de wallet y sesión por JWT
 src/users/             Perfiles y follows
-src/posts/             Posts, replies, likes y reposts
+src/posts/             Posts, replies, likes, reposts y extracción de hashtags
+src/feed/              Timelines, tendencias y sugerencias de a quién seguir
 src/common/            Piezas compartidas, como la paginación
 src/health/            Comprobación de estado
 test/                  Tests e2e
@@ -83,7 +84,6 @@ El handle tiene de 3 a 15 caracteres (letras, números y guion bajo) y se guarda
 | `GET /api/posts/:id/replies` | Opcional | Sus replies, de la más antigua a la más reciente |
 | `PUT /api/posts/:id/like` y `DELETE` | Sí | Da o quita el like y devuelve el post |
 | `PUT /api/posts/:id/repost` y `DELETE` | Sí | Hace o deshace el repost y devuelve el post |
-| `GET /api/users/:handle/posts` | Opcional | Posts de ese usuario, del más reciente al más antiguo, sin replies |
 
 Un post tiene esta forma:
 
@@ -107,6 +107,37 @@ Un post tiene esta forma:
 - Cada vez que un post se sirve, solo o dentro de una lista, suma una view.
 - Dar like o hacer repost dos veces no cambia nada; quitarlo dos veces, tampoco.
 - Un post borrado responde 404 y desaparece de todas las listas. Su texto y su imagen se eliminan de la base de datos, pero la fila se conserva para que sus replies sigan indicando a qué respondían.
+
+## Timelines
+
+| Ruta | Sesión | Qué muestra |
+|---|---|---|
+| `GET /api/feed/discover` | Opcional | Los posts de todo el mundo; es la pestaña "Discover" |
+| `GET /api/feed/network` | Sí | Posts y reposts del usuario y de quienes sigue; es la pestaña "My network" |
+| `GET /api/users/:handle/posts` | Opcional | Posts y reposts de ese usuario, para su perfil |
+| `GET /api/hashtags/:tag/posts` | Opcional | Posts y replies que llevan ese hashtag; `tag` va sin `#` |
+
+Las cuatro van del más reciente al más antiguo, están paginadas y devuelven entradas con esta forma:
+
+```json
+{ "id": "…", "post": { "…": "un post, como arriba" }, "repostedBy": null }
+```
+
+- `repostedBy` es el usuario que hizo el repost, o `null` si la entrada es el post en sí.
+- Un mismo post puede salir varias veces en una timeline (como post y como repost de varias personas). Por eso `id` identifica la entrada, no el post: es lo que hay que usar como `key` en el front.
+- Las replies solo aparecen en la timeline de un hashtag. "Discover" tampoco muestra reposts.
+- "Discover" es cronológico; no hay algoritmo de ranking.
+
+## Tendencias y sugerencias
+
+| Ruta | Sesión | Qué hace |
+|---|---|---|
+| `GET /api/hashtags/trending` | No | Hashtags con más posts en las últimas 24 horas: `{ items: [{ hashtag, tag, postCount }] }` |
+| `GET /api/feed/who-to-follow` | Opcional | Usuarios con más seguidores; con sesión, sin el propio usuario ni los que ya sigue |
+
+Las dos aceptan `?limit=` (de 1 a 20); por defecto devuelven 10 tendencias y 3 sugerencias.
+
+Un hashtag es un `#` seguido de letras, números o guiones bajos (hasta 50, con al menos una letra). `#NOVA` y `#nova` cuentan como el mismo; en las tendencias se muestra escrito como lo escribe la mayoría.
 
 ## Paginación
 

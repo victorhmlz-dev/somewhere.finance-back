@@ -64,11 +64,12 @@ model Post {
   // A deleted post keeps its row, emptied, so its replies still hang from it.
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
 
-  author  User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  parent  Post?    @relation("replies", fields: [parentId], references: [id], onDelete: SetNull)
-  replies Post[]   @relation("replies")
-  likes   Like[]
-  reposts Repost[]
+  author   User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent   Post?         @relation("replies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies  Post[]        @relation("replies")
+  likes    Like[]
+  reposts  Repost[]
+  hashtags PostHashtag[]
 
   @@index([authorId, id])
   @@index([parentId, id])
@@ -133,6 +134,21 @@ model Follow {
   @@unique([followerId, followingId])
   @@index([followingId])
   @@map("follows")
+}
+
+// One row per hashtag written in a post. Removed when the post is deleted.
+model PostHashtag {
+  postId String @map("post_id") @db.Uuid
+  // Lowercase and without the `#`: what a hashtag is matched by.
+  tag    String @db.VarChar(50)
+  // As the author wrote it, without the `#`.
+  label  String @db.VarChar(50)
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([postId, tag])
+  @@index([tag, postId])
+  @@map("post_hashtags")
 }
 
 // One row per sign-in attempt: the exact message the wallet has to sign.

@@ -9,6 +9,22 @@ export interface TestSession {
   user: UserProfile;
 }
 
+/** Requests to the API, sent as `session` or anonymously without one. */
+export function apiClient(app: INestApplication<App>, session?: TestSession) {
+  const send = (method: 'get' | 'post' | 'put' | 'delete', path: string) => {
+    const req = request(app.getHttpServer())[method](path);
+    return session
+      ? req.set('Authorization', `Bearer ${session.accessToken}`)
+      : req;
+  };
+  return {
+    get: (path: string) => send('get', path),
+    post: (path: string) => send('post', path),
+    put: (path: string) => send('put', path),
+    delete: (path: string) => send('delete', path),
+  };
+}
+
 /** Runs the whole wallet login and returns the resulting session. */
 export async function signIn(
   app: INestApplication<App>,

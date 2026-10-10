@@ -295,41 +295,4 @@ describe('Posts (e2e)', () => {
       expect(replies.body.items).toEqual([]);
     });
   });
-
-  describe('posts of a user', () => {
-    it('lists them newest first, without replies, page by page', async () => {
-      const aria = await newUser();
-      const marcus = await newUser();
-      const oldest = await publish(aria, { text: 'One.' });
-      const middle = await publish(aria, { text: 'Two.' });
-      const newest = await publish(aria, { text: 'Three.' });
-      await publish(aria, { text: 'A reply.', replyToId: oldest.id });
-      await publish(marcus, { text: 'Not hers.' });
-      await api(marcus).put(`/posts/${newest.id}/like`).expect(200);
-
-      const path = `/users/${aria.user.handle.toUpperCase()}/posts`;
-      const firstPage = await api(marcus).get(`${path}?limit=2`).expect(200);
-      expect(ids(firstPage.body.items)).toEqual([newest.id, middle.id]);
-      expect(firstPage.body.items[0]).toMatchObject({
-        isLiked: true,
-        isReposted: false,
-        stats: { likes: 1, views: 1 },
-      });
-      expect(firstPage.body.items[1].isLiked).toBe(false);
-
-      const secondPage = await api(marcus)
-        .get(`${path}?limit=2&cursor=${firstPage.body.nextCursor}`)
-        .expect(200);
-      expect(ids(secondPage.body.items)).toEqual([oldest.id]);
-      expect(secondPage.body.nextCursor).toBeNull();
-
-      // Each time a post is served in a list counts as one more view.
-      const again = await api().get(`${path}?limit=1`).expect(200);
-      expect(again.body.items[0].stats.views).toBe(2);
-    });
-
-    it('answers 404 for a user that does not exist', async () => {
-      await api().get('/users/nobody_at_all/posts').expect(404);
-    });
-  });
 });
