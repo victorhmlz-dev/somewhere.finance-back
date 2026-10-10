@@ -19,17 +19,24 @@ enum WalletFamily {
 }
 
 model User {
-  id        String   @id @default(uuid(7)) @db.Uuid
+  id             String   @id @default(uuid(7)) @db.Uuid
   // Stored in lowercase; uniqueness is therefore case-insensitive.
-  handle    String   @unique @db.VarChar(15)
-  name      String   @db.VarChar(50)
-  bio       String   @default("") @db.VarChar(160)
-  avatarUrl String?  @map("avatar_url")
-  verified  Boolean  @default(false)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  handle         String   @unique @db.VarChar(15)
+  name           String   @db.VarChar(50)
+  bio            String   @default("") @db.VarChar(160)
+  avatarUrl      String?  @map("avatar_url")
+  verified       Boolean  @default(false)
+  // Kept in step with the `follows` table, in the same transaction as each change.
+  followingCount Int      @default(0) @map("following_count")
+  followersCount Int      @default(0) @map("followers_count")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  wallets Wallet[]
+  wallets   Wallet[]
+  // Rows where this user is the one following.
+  following Follow[] @relation("following")
+  // Rows where this user is the one being followed.
+  followers Follow[] @relation("followers")
 
   @@map("users")
 }
@@ -48,6 +55,22 @@ model Wallet {
   @@unique([family, address])
   @@index([userId])
   @@map("wallets")
+}
+
+// `follower` follows `following`. The id is a UUID v7, so ordering by it is
+// ordering by the moment of the follow.
+model Follow {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  followerId  String   @map("follower_id") @db.Uuid
+  followingId String   @map("following_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  follower  User @relation("following", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("followers", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+  @@map("follows")
 }
 
 // One row per sign-in attempt: the exact message the wallet has to sign.

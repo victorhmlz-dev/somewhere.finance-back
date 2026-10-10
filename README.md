@@ -42,7 +42,8 @@ prisma/schema.prisma   Modelo de datos; las migraciones salen de aquí
 src/config/            Lectura y validación de variables de entorno
 src/prisma/            Conexión a la base de datos
 src/auth/              Login por firma de wallet y sesión por JWT
-src/users/             Forma pública de un usuario
+src/users/             Perfiles y follows
+src/common/            Piezas compartidas, como la paginación
 src/health/            Comprobación de estado
 test/                  Tests e2e
 ```
@@ -55,3 +56,22 @@ test/                  Tests e2e
 4. Las rutas protegidas esperan la cabecera `Authorization: Bearer <accessToken>`. `GET /api/auth/me` devuelve el usuario de la sesión.
 
 Un reto caduca a los 5 minutos y solo sirve una vez. Una dirección EVM es la misma en Ethereum, BNB Chain y Robinhood Chain, así que una wallet se identifica por familia (`evm` o `solana`), no por cadena.
+
+## Perfiles y follows
+
+| Ruta | Sesión | Qué hace |
+|---|---|---|
+| `GET /api/users/:handle` | Opcional | Perfil público, con `followingCount`, `followersCount` e `isFollowing` |
+| `PATCH /api/users/me` | Sí | Edita `name`, `handle`, `bio` y `avatar`; solo cambia los campos enviados |
+| `PUT /api/users/:handle/follow` | Sí | Sigue al usuario y devuelve su perfil |
+| `DELETE /api/users/:handle/follow` | Sí | Lo deja de seguir y devuelve su perfil |
+| `GET /api/users/:handle/followers` | Opcional | Quién lo sigue, del más reciente al más antiguo |
+| `GET /api/users/:handle/following` | Opcional | A quién sigue, del más reciente al más antiguo |
+
+`isFollowing` indica si el usuario de la sesión sigue a ese usuario; sin sesión siempre es `false`. En las rutas de sesión opcional, un token presente pero inválido responde 401.
+
+El handle tiene de 3 a 15 caracteres (letras, números y guion bajo) y se guarda en minúsculas. `avatar` es una URL `http` o `https`, o `null` para quitarlo. Seguir o dejar de seguir dos veces no cambia nada.
+
+## Paginación
+
+Las listas aceptan `?limit=` (de 1 a 50, por defecto 20) y `?cursor=`, y responden `{ items, nextCursor }`. Para la página siguiente se envía `nextCursor` como `cursor`; cuando es `null` no hay más.
