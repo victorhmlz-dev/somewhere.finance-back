@@ -45,6 +45,7 @@ src/auth/              Login por firma de wallet y sesión por JWT
 src/users/             Perfiles y follows
 src/posts/             Posts, replies, likes, reposts y extracción de hashtags
 src/feed/              Timelines, tendencias y sugerencias de a quién seguir
+src/notifications/     Notificaciones
 src/common/            Piezas compartidas, como la paginación
 src/health/            Comprobación de estado
 test/                  Tests e2e
@@ -138,6 +139,39 @@ Las cuatro van del más reciente al más antiguo, están paginadas y devuelven e
 Las dos aceptan `?limit=` (de 1 a 20); por defecto devuelven 10 tendencias y 3 sugerencias.
 
 Un hashtag es un `#` seguido de letras, números o guiones bajos (hasta 50, con al menos una letra). `#NOVA` y `#nova` cuentan como el mismo; en las tendencias se muestra escrito como lo escribe la mayoría.
+
+## Notificaciones
+
+Todas las rutas piden sesión y se refieren al usuario de esa sesión.
+
+| Ruta | Qué hace |
+|---|---|
+| `GET /api/notifications` | Lista paginada, de la más reciente a la más antigua. Acepta `?tab=all`, `verified` o `mentions` |
+| `GET /api/notifications/unread-count` | `{ count }`, para el indicador del menú |
+| `POST /api/notifications/read` | Marca todas como leídas |
+
+Una notificación tiene esta forma:
+
+```json
+{
+  "id": "…",
+  "type": "like",
+  "actors": [{ "id": "…", "name": "…", "handle": "…", "avatar": null, "verified": false, "bio": "" }],
+  "otherActorCount": 12,
+  "post": { "…": "un post, como arriba" },
+  "createdAt": "2026-10-11T00:00:00.000Z",
+  "isUnread": true
+}
+```
+
+- `type` es `like`, `repost`, `follow`, `mention` o `reply`.
+- `actors` trae hasta tres usuarios, del más reciente al más antiguo, y `otherActorCount` cuántos más hay: "Aria, Yuki y 12 más".
+- `post` es el post que recibió el like o el repost, o el post que menciona o responde. En un `follow` es `null`.
+- Los likes y los reposts que un post recibe en un mismo día (UTC) forman una sola notificación, y lo mismo los follows de un día. Las menciones y las replies van siempre sueltas.
+- La pestaña `verified` solo cuenta lo que hicieron usuarios verificados; `mentions` incluye menciones y replies.
+- Nadie recibe notificaciones de lo que se hace a sí mismo. Una reply que además menciona al autor del post genera una sola notificación, de tipo `reply`.
+- Al deshacer lo que causó una notificación (quitar el like, dejar de seguir, borrar el post), la notificación desaparece.
+- Una mención es `@` seguido de un handle; no distingue mayúsculas.
 
 ## Paginación
 

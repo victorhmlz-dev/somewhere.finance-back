@@ -32,14 +32,16 @@ model User {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  wallets   Wallet[]
+  wallets             Wallet[]
   // Rows where this user is the one following.
-  following Follow[] @relation("following")
+  following           Follow[]       @relation("following")
   // Rows where this user is the one being followed.
-  followers Follow[] @relation("followers")
-  posts     Post[]
-  likes     Like[]
-  reposts   Repost[]
+  followers           Follow[]       @relation("followers")
+  posts               Post[]
+  likes               Like[]
+  reposts             Repost[]
+  notifications       Notification[] @relation("received")
+  notificationsCaused Notification[] @relation("caused")
 
   @@map("users")
 }
@@ -64,12 +66,13 @@ model Post {
   // A deleted post keeps its row, emptied, so its replies still hang from it.
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
 
-  author   User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  parent   Post?         @relation("replies", fields: [parentId], references: [id], onDelete: SetNull)
-  replies  Post[]        @relation("replies")
-  likes    Like[]
-  reposts  Repost[]
-  hashtags PostHashtag[]
+  author        User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent        Post?          @relation("replies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies       Post[]         @relation("replies")
+  likes         Like[]
+  reposts       Repost[]
+  hashtags      PostHashtag[]
+  notifications Notification[]
 
   @@index([authorId, id])
   @@index([parentId, id])
@@ -149,6 +152,38 @@ model PostHashtag {
   @@id([postId, tag])
   @@index([tag, postId])
   @@map("post_hashtags")
+}
+
+enum NotificationType {
+  like
+  repost
+  follow
+  mention
+  reply
+}
+
+// One row per thing `actor` did that `recipient` should hear about. Rows are
+// grouped when they are read ("Aria and 3 others liked your post"), and a row
+// is removed when what caused it is undone or its post is deleted.
+model Notification {
+  id          String           @id @default(uuid(7)) @db.Uuid
+  recipientId String           @map("recipient_id") @db.Uuid
+  actorId     String           @map("actor_id") @db.Uuid
+  type        NotificationType
+  // The post liked or reposted, or the post that mentions or replies.
+  // Null for a follow.
+  postId      String?          @map("post_id") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  readAt      DateTime?        @map("read_at") @db.Timestamptz(3)
+
+  recipient User  @relation("received", fields: [recipientId], references: [id], onDelete: Cascade)
+  actor     User  @relation("caused", fields: [actorId], references: [id], onDelete: Cascade)
+  post      Post? @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([recipientId, actorId, type, postId])
+  @@index([recipientId, id])
+  @@index([postId])
+  @@map("notifications")
 }
 
 // One row per sign-in attempt: the exact message the wallet has to sign.
