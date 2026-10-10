@@ -12,8 +12,8 @@ import {
 } from '../common/pagination.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { UsersService } from '../users/users.service.js';
 import { CreatePostDto } from './dto/create-post.dto.js';
+import { extractHashtags } from './hashtags.js';
 import {
   POST_INCLUDE,
   type PostRow,
@@ -25,10 +25,7 @@ type Counter = 'likesCount' | 'repostsCount';
 
 @Injectable()
 export class PostsService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly users: UsersService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async create(authorId: string, dto: CreatePostDto): Promise<PostView> {
     const text = dto.text ?? '';
@@ -50,6 +47,7 @@ export class PostsService {
           text,
           imageUrl: dto.image,
           parentId: dto.replyToId,
+          hashtags: { create: extractHashtags(text) },
         },
       });
     });
@@ -82,7 +80,9 @@ export class PostsService {
         where: { id, deletedAt: null },
         data: { deletedAt: new Date(), text: '', imageUrl: null },
       });
-      if (count === 0 || !post.parentId) return;
+      if (count === 0) return;
+      await tx.postHashtag.deleteMany({ where: { postId: id } });
+      if (!post.parentId) return;
       await tx.post.update({
         where: { id: post.parentId },
         data: { repliesCount: { decrement: 1 } },
@@ -133,19 +133,21 @@ export class PostsService {
     return this.toPostPage(rows, query.limit, viewerId);
   }
 
-  /** Posts written by `handle`, newest first. Replies are left out. */
-  async listByAuthor(
-    handle: string,
-    query: PaginationQueryDto,
+  /**
+   * The posts with those ids, by id, counting a view for each. Deleted posts
+   * are left out.
+   */
+  async viewsById(
+    ids: string[],
     viewerId?: string,
-  ): Promise<Page<PostView>> {
-    const author = await this.users.findByHandle(handle);
+  ): Promise<Map<string, PostView>> {
     const rows = await this.prisma.post.findMany({
-      where: { authorId: author.id, parentId: null, deletedAt: null },
+      where: { id: { in: ids }, deletedAt: null },
       include: POST_INCLUDE,
-      ...pageArgs(query),
     });
-    return this.toPostPage(rows, query.limit, viewerId);
+    await this.countViews(rows);
+    const views = await this.toViews(rows, viewerId);
+    return new Map(views.map((view) => [view.id, view]));
   }
 
   private async assertExists(id: string) {
@@ -197,15 +199,20 @@ export class PostsService {
     viewerId?: string,
   ): Promise<Page<PostView>> {
     const pageRows = rows.slice(0, limit);
-    await this.prisma.post.updateMany({
-      where: { id: { in: pageRows.map((row) => row.id) } },
-      data: { viewsCount: { increment: 1 } },
-    });
-    for (const row of pageRows) row.viewsCount += 1;
+    await this.countViews(pageRows);
 
     const views = await this.toViews(pageRows, viewerId);
     const viewById = new Map(views.map((view) => [view.id, view]));
     return toPage(rows, limit, (row) => viewById.get(row.id)!);
+  }
+
+  private async countViews(rows: PostRow[]): Promise<void> {
+    if (rows.length === 0) return;
+    await this.prisma.post.updateMany({
+      where: { id: { in: rows.map((row) => row.id) } },
+      data: { viewsCount: { increment: 1 } },
+    });
+    for (const row of rows) row.viewsCount += 1;
   }
 
   private async toViews(

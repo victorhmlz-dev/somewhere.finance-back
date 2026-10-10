@@ -78,7 +78,8 @@ Hecho:
 - Paginación por cursor común a todas las listas (`src/common/pagination.ts`): `?limit=` y `?cursor=`, respuesta `{ items, nextCursor }`.
 - `OptionalAuthGuard` para rutas públicas cuya respuesta depende de quién pregunta.
 - Posts (2026-10-11): publicar, ver y borrar posts, replies, likes y reposts, y la lista de posts de un usuario. Tablas `posts`, `likes` y `reposts`; los contadores de replies, reposts, likes y views viven en la fila del post. Las rutas y la forma de un post están en el `README.md`.
-- Tests unitarios de la firma y del entorno; tests e2e de auth, health, users y posts contra la base de datos real.
+- Feeds (2026-10-11): timelines "Discover", "My network", perfil y hashtag; tendencias de las últimas 24 horas y sugerencias de a quién seguir. Tabla `post_hashtags`, que se rellena al publicar. Posts y reposts se mezclan en una sola timeline con una consulta SQL directa en `src/feed/feed.service.ts`.
+- Tests unitarios de la firma, del entorno y de la extracción de hashtags; tests e2e de auth, health, users, posts y feed contra la base de datos real. Los e2e corren un archivo detrás de otro porque comparten base de datos.
 - `.gitattributes` fija los finales de línea de `prisma/migrations/` en LF. Prisma guarda una huella de cada migración aplicada; si el archivo cambia aunque sea de finales de línea, `prisma migrate dev` pide reiniciar la base de datos.
 
 Límites conocidos de lo hecho:
@@ -86,9 +87,11 @@ Límites conocidos de lo hecho:
 - La verificación EVM solo cubre wallets normales. Las de contrato (ERC-1271) necesitan una llamada RPC y quedan para la fase on-chain.
 - No hay logout, refresco de token ni forma de vincular una segunda wallet a un usuario.
 - El avatar y la imagen de un post son solo una URL; no hay subida de imágenes.
-- Un repost es una marca sobre el post (tabla `reposts`), no un post nuevo. Todavía no aparece en ninguna lista: mostrarlo en los feeds y en el perfil es parte del trabajo de feeds.
+- Un repost es una marca sobre el post (tabla `reposts`), no un post nuevo. Sale en "My network" y en el perfil; "Discover" no muestra reposts.
+- Las timelines no deduplican: un post puede salir como post y como repost de varias personas en la misma lista.
+- "Discover" y las sugerencias de a quién seguir son deliberadamente simples (orden cronológico y número de seguidores). Las categorías que el front muestra junto a cada tendencia ("NFTs", "Launchpad") son editoriales y la API no las da.
 - Un post borrado conserva su fila, vacía y con `deleted_at`, para que sus replies sigan apuntando a él. Toda consulta de posts tiene que filtrar `deletedAt: null`.
-- El texto de un post se guarda tal cual; hashtags y menciones aún no se extraen.
+- Las menciones (`@handle`) aún no se extraen del texto de un post.
 - No se puede borrar una cuenta. Cuando se pueda, habrá que ajustar los contadores de follows de los demás usuarios, porque el borrado en cascada no los toca.
 
 Requisitos de la máquina: Node 22.22.3 o superior para el CLI de NestJS (`npm run build`, `npm run start:dev`) y Docker Desktop en marcha para la base de datos y los tests e2e. El 2026-10-10 la máquina tenía Node 22.13.0 y el usuario iba a actualizarlo.
@@ -125,12 +128,7 @@ Implicaciones:
 
 ## 6. Siguiente trabajo
 
-Del primer hito quedan, en este orden:
-
-1. Feeds "Discover" y "My network", con los reposts dentro, y hashtags con tendencias.
-2. Notificaciones (`like`, `repost`, `follow`, `mention`), que incluyen extraer las menciones del texto.
-
-Decisiones ya acordadas para esa parte: "Discover" cronológico, sin algoritmo de ranking, y paginación por cursor como en el resto.
+Del primer hito queda un paso: notificaciones (`like`, `repost`, `follow`, `mention`), agrupadas por actores y con estado leído o no. Incluye extraer las menciones del texto. Las de tipo `sale` y `bid` dependen del marketplace y quedan fuera.
 
 Forma de trabajo: una rama por paso (`features/<tema>`), pull request a `main`, y la rama siguiente sale del `main` ya actualizado. Los commits y los merges los hace el usuario.
 
