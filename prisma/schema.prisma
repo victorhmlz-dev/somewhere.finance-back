@@ -37,8 +37,70 @@ model User {
   following Follow[] @relation("following")
   // Rows where this user is the one being followed.
   followers Follow[] @relation("followers")
+  posts     Post[]
+  likes     Like[]
+  reposts   Repost[]
 
   @@map("users")
+}
+
+// A post, or a reply when `parentId` is set.
+model Post {
+  id       String  @id @default(uuid(7)) @db.Uuid
+  authorId String  @map("author_id") @db.Uuid
+  // Empty when the post is only an image.
+  text     String  @db.VarChar(280)
+  imageUrl String? @map("image_url")
+  parentId String? @map("parent_id") @db.Uuid
+
+  // Kept in step with replies, reposts and likes, in the same transaction as
+  // each change.
+  repliesCount Int @default(0) @map("replies_count")
+  repostsCount Int @default(0) @map("reposts_count")
+  likesCount   Int @default(0) @map("likes_count")
+  viewsCount   Int @default(0) @map("views_count")
+
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  // A deleted post keeps its row, emptied, so its replies still hang from it.
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+
+  author  User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent  Post?    @relation("replies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies Post[]   @relation("replies")
+  likes   Like[]
+  reposts Repost[]
+
+  @@index([authorId, id])
+  @@index([parentId, id])
+  @@map("posts")
+}
+
+model Like {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  postId    String   @map("post_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId])
+  @@index([postId])
+  @@map("likes")
+}
+
+model Repost {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  postId    String   @map("post_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId])
+  @@index([postId])
+  @@map("reposts")
 }
 
 model Wallet {
