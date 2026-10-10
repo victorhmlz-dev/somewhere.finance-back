@@ -77,13 +77,18 @@ Hecho:
 - Perfiles y follows (2026-10-10): ver un perfil por handle, editar el propio, seguir y dejar de seguir, y listas paginadas de followers y following. Tabla `follows` y contadores `following_count` y `followers_count` en `users`, actualizados en la misma transacción que cada follow. Las rutas están en el `README.md`.
 - Paginación por cursor común a todas las listas (`src/common/pagination.ts`): `?limit=` y `?cursor=`, respuesta `{ items, nextCursor }`.
 - `OptionalAuthGuard` para rutas públicas cuya respuesta depende de quién pregunta.
-- Tests unitarios de la firma y del entorno; tests e2e de auth, health y users contra la base de datos real.
+- Posts (2026-10-11): publicar, ver y borrar posts, replies, likes y reposts, y la lista de posts de un usuario. Tablas `posts`, `likes` y `reposts`; los contadores de replies, reposts, likes y views viven en la fila del post. Las rutas y la forma de un post están en el `README.md`.
+- Tests unitarios de la firma y del entorno; tests e2e de auth, health, users y posts contra la base de datos real.
+- `.gitattributes` fija los finales de línea de `prisma/migrations/` en LF. Prisma guarda una huella de cada migración aplicada; si el archivo cambia aunque sea de finales de línea, `prisma migrate dev` pide reiniciar la base de datos.
 
 Límites conocidos de lo hecho:
 
 - La verificación EVM solo cubre wallets normales. Las de contrato (ERC-1271) necesitan una llamada RPC y quedan para la fase on-chain.
 - No hay logout, refresco de token ni forma de vincular una segunda wallet a un usuario.
-- El avatar es solo una URL; no hay subida de imágenes.
+- El avatar y la imagen de un post son solo una URL; no hay subida de imágenes.
+- Un repost es una marca sobre el post (tabla `reposts`), no un post nuevo. Todavía no aparece en ninguna lista: mostrarlo en los feeds y en el perfil es parte del trabajo de feeds.
+- Un post borrado conserva su fila, vacía y con `deleted_at`, para que sus replies sigan apuntando a él. Toda consulta de posts tiene que filtrar `deletedAt: null`.
+- El texto de un post se guarda tal cual; hashtags y menciones aún no se extraen.
 - No se puede borrar una cuenta. Cuando se pueda, habrá que ajustar los contadores de follows de los demás usuarios, porque el borrado en cascada no los toca.
 
 Requisitos de la máquina: Node 22.22.3 o superior para el CLI de NestJS (`npm run build`, `npm run start:dev`) y Docker Desktop en marcha para la base de datos y los tests e2e. El 2026-10-10 la máquina tenía Node 22.13.0 y el usuario iba a actualizarlo.
@@ -122,10 +127,12 @@ Implicaciones:
 
 Del primer hito quedan, en este orden:
 
-1. Posts, likes, reposts, replies y hashtags, con los feeds "Discover" y "My network".
-2. Notificaciones.
+1. Feeds "Discover" y "My network", con los reposts dentro, y hashtags con tendencias.
+2. Notificaciones (`like`, `repost`, `follow`, `mention`), que incluyen extraer las menciones del texto.
 
-Decisiones ya acordadas para esa parte: 280 caracteres por post, contadores guardados en la fila, imágenes solo como URL, "Discover" cronológico y views contadas sin deduplicar.
+Decisiones ya acordadas para esa parte: "Discover" cronológico, sin algoritmo de ranking, y paginación por cursor como en el resto.
+
+Forma de trabajo: una rama por paso (`features/<tema>`), pull request a `main`, y la rama siguiente sale del `main` ya actualizado. Los commits y los merges los hace el usuario.
 
 En paralelo o después, conectar el front: cliente de API en `lib/services/`, variable de entorno con la URL del back y el flujo de Connect Wallet contra `/api/auth`.
 

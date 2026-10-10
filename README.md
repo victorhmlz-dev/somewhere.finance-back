@@ -43,6 +43,7 @@ src/config/            Lectura y validación de variables de entorno
 src/prisma/            Conexión a la base de datos
 src/auth/              Login por firma de wallet y sesión por JWT
 src/users/             Perfiles y follows
+src/posts/             Posts, replies, likes y reposts
 src/common/            Piezas compartidas, como la paginación
 src/health/            Comprobación de estado
 test/                  Tests e2e
@@ -71,6 +72,41 @@ Un reto caduca a los 5 minutos y solo sirve una vez. Una dirección EVM es la mi
 `isFollowing` indica si el usuario de la sesión sigue a ese usuario; sin sesión siempre es `false`. En las rutas de sesión opcional, un token presente pero inválido responde 401.
 
 El handle tiene de 3 a 15 caracteres (letras, números y guion bajo) y se guarda en minúsculas. `avatar` es una URL `http` o `https`, o `null` para quitarlo. Seguir o dejar de seguir dos veces no cambia nada.
+
+## Posts
+
+| Ruta | Sesión | Qué hace |
+|---|---|---|
+| `POST /api/posts` | Sí | Publica un post con `{ text, image, replyToId }`; con `replyToId` es una reply |
+| `GET /api/posts/:id` | Opcional | Devuelve el post |
+| `DELETE /api/posts/:id` | Sí | Lo borra; solo puede su autor |
+| `GET /api/posts/:id/replies` | Opcional | Sus replies, de la más antigua a la más reciente |
+| `PUT /api/posts/:id/like` y `DELETE` | Sí | Da o quita el like y devuelve el post |
+| `PUT /api/posts/:id/repost` y `DELETE` | Sí | Hace o deshace el repost y devuelve el post |
+| `GET /api/users/:handle/posts` | Opcional | Posts de ese usuario, del más reciente al más antiguo, sin replies |
+
+Un post tiene esta forma:
+
+```json
+{
+  "id": "…",
+  "author": { "id": "…", "name": "…", "handle": "…", "avatar": null, "verified": false, "bio": "" },
+  "text": "…",
+  "image": null,
+  "createdAt": "2026-10-11T00:00:00.000Z",
+  "replyTo": null,
+  "stats": { "replies": 0, "reposts": 0, "likes": 0, "views": 0 },
+  "isLiked": false,
+  "isReposted": false
+}
+```
+
+- El texto admite hasta 280 caracteres. Un post necesita texto, imagen (una URL `http` o `https`) o ambos.
+- En una reply, `replyTo` es `{ id, handle }`: el post al que responde y el handle de su autor.
+- `isLiked` e `isReposted` se refieren al usuario de la sesión; sin sesión son `false`.
+- Cada vez que un post se sirve, solo o dentro de una lista, suma una view.
+- Dar like o hacer repost dos veces no cambia nada; quitarlo dos veces, tampoco.
+- Un post borrado responde 404 y desaparece de todas las listas. Su texto y su imagen se eliminan de la base de datos, pero la fila se conserva para que sus replies sigan indicando a qué respondían.
 
 ## Paginación
 

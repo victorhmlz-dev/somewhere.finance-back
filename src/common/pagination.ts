@@ -26,6 +26,22 @@ export interface Page<T> {
 }
 
 /**
+ * Prisma arguments for one page of a table whose id is a UUID v7, so ordering
+ * by id is ordering by creation time. Asks for one row more than the page
+ * holds; `toPage` uses it to know whether there is a next page.
+ */
+export function pageArgs(
+  { cursor, limit }: PaginationQueryDto,
+  order: 'asc' | 'desc' = 'desc',
+) {
+  return {
+    orderBy: { id: order },
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+  };
+}
+
+/**
  * Turns `limit + 1` rows into a page: the extra row only tells whether there
  * is a next page.
  */

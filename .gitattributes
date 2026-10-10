@@ -1,0 +1,3 @@
+# Prisma stores a checksum of every applied migration, so their line endings
+# must be the same on every machine.
+prisma/migrations/** text eol=lf

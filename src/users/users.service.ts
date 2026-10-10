@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import {
   type Page,
+  pageArgs,
   type PaginationQueryDto,
   toPage,
 } from '../common/pagination.js';
@@ -131,7 +132,7 @@ export class UsersService {
     const rows = await this.prisma.follow.findMany({
       where: { followingId: user.id },
       include: { follower: true },
-      ...this.pageArgs(query),
+      ...pageArgs(query),
     });
     return this.toUserPage(
       rows.map((row) => ({ id: row.id, user: row.follower })),
@@ -150,7 +151,7 @@ export class UsersService {
     const rows = await this.prisma.follow.findMany({
       where: { followerId: user.id },
       include: { following: true },
-      ...this.pageArgs(query),
+      ...pageArgs(query),
     });
     return this.toUserPage(
       rows.map((row) => ({ id: row.id, user: row.following })),
@@ -159,20 +160,12 @@ export class UsersService {
     );
   }
 
-  private async findByHandle(handle: string): Promise<User> {
+  async findByHandle(handle: string): Promise<User> {
     const user = await this.prisma.user.findUnique({
       where: { handle: handle.toLowerCase() },
     });
     if (!user) throw new NotFoundException('User not found');
     return user;
-  }
-
-  private pageArgs({ cursor, limit }: PaginationQueryDto) {
-    return {
-      orderBy: { id: 'desc' as const },
-      take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    };
   }
 
   private async toUserPage(
