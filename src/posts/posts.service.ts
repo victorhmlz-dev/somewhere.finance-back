@@ -11,9 +11,14 @@ import {
   toPage,
 } from '../common/pagination.js';
 import type { Prisma } from '../generated/prisma/client.js';
+import {
+  addNotification,
+  removeNotification,
+} from '../notifications/notification-events.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreatePostDto } from './dto/create-post.dto.js';
 import { extractHashtags } from './hashtags.js';
+import { extractMentions } from './mentions.js';
 import {
   POST_INCLUDE,
   type PostRow,
@@ -21,7 +26,9 @@ import {
   toPostView,
 } from './post-view.js';
 
-type Counter = 'likesCount' | 'repostsCount';
+type Reaction = 'like' | 'repost';
+
+const COUNTER = { like: 'likesCount', repost: 'repostsCount' } as const;
 
 @Injectable()
 export class PostsService {
@@ -32,24 +39,49 @@ export class PostsService {
     if (!text && !dto.image) {
       throw new BadRequestException('A post needs text or an image');
     }
-    if (dto.replyToId) await this.assertExists(dto.replyToId);
+    const parent = dto.replyToId
+      ? await this.assertExists(dto.replyToId)
+      : null;
+    const mentioned = await this.prisma.user.findMany({
+      where: { handle: { in: extractMentions(text) } },
+      select: { id: true },
+    });
 
     const post = await this.prisma.$transaction(async (tx) => {
-      if (dto.replyToId) {
+      if (parent) {
         await tx.post.update({
-          where: { id: dto.replyToId },
+          where: { id: parent.id },
           data: { repliesCount: { increment: 1 } },
         });
       }
-      return tx.post.create({
+      const created = await tx.post.create({
         data: {
           authorId,
           text,
           imageUrl: dto.image,
-          parentId: dto.replyToId,
+          parentId: parent?.id,
           hashtags: { create: extractHashtags(text) },
         },
       });
+
+      const event = { actorId: authorId, postId: created.id };
+      if (parent) {
+        await addNotification(tx, {
+          ...event,
+          type: 'reply',
+          recipientId: parent.authorId,
+        });
+      }
+      for (const user of mentioned) {
+        // The author of the post replied to already hears about it as a reply.
+        if (user.id === parent?.authorId) continue;
+        await addNotification(tx, {
+          ...event,
+          type: 'mention',
+          recipientId: user.id,
+        });
+      }
+      return created;
     });
 
     return this.view(post.id, authorId);
@@ -82,6 +114,7 @@ export class PostsService {
       });
       if (count === 0) return;
       await tx.postHashtag.deleteMany({ where: { postId: id } });
+      await tx.notification.deleteMany({ where: { postId: id } });
       if (!post.parentId) return;
       await tx.post.update({
         where: { id: post.parentId },
@@ -92,19 +125,19 @@ export class PostsService {
 
   /** Liking a post already liked changes nothing; same for the other three. */
   like(userId: string, postId: string): Promise<PostView> {
-    return this.react(userId, postId, 'likesCount', 1, (tx) =>
+    return this.react(userId, postId, 'like', 1, (tx) =>
       tx.like.createMany({ data: [{ userId, postId }], skipDuplicates: true }),
     );
   }
 
   unlike(userId: string, postId: string): Promise<PostView> {
-    return this.react(userId, postId, 'likesCount', -1, (tx) =>
+    return this.react(userId, postId, 'like', -1, (tx) =>
       tx.like.deleteMany({ where: { userId, postId } }),
     );
   }
 
   repost(userId: string, postId: string): Promise<PostView> {
-    return this.react(userId, postId, 'repostsCount', 1, (tx) =>
+    return this.react(userId, postId, 'repost', 1, (tx) =>
       tx.repost.createMany({
         data: [{ userId, postId }],
         skipDuplicates: true,
@@ -113,7 +146,7 @@ export class PostsService {
   }
 
   unrepost(userId: string, postId: string): Promise<PostView> {
-    return this.react(userId, postId, 'repostsCount', -1, (tx) =>
+    return this.react(userId, postId, 'repost', -1, (tx) =>
       tx.repost.deleteMany({ where: { userId, postId } }),
     );
   }
@@ -134,18 +167,19 @@ export class PostsService {
   }
 
   /**
-   * The posts with those ids, by id, counting a view for each. Deleted posts
-   * are left out.
+   * The posts with those ids, by id. Deleted posts are left out. Counts a
+   * view for each unless `countViews` is false.
    */
   async viewsById(
     ids: string[],
     viewerId?: string,
+    { countViews = true } = {},
   ): Promise<Map<string, PostView>> {
     const rows = await this.prisma.post.findMany({
       where: { id: { in: ids }, deletedAt: null },
       include: POST_INCLUDE,
     });
-    await this.countViews(rows);
+    if (countViews) await this.countViews(rows);
     const views = await this.toViews(rows, viewerId);
     return new Map(views.map((view) => [view.id, view]));
   }
@@ -165,19 +199,27 @@ export class PostsService {
   private async react(
     userId: string,
     postId: string,
-    counter: Counter,
+    reaction: Reaction,
     delta: 1 | -1,
     change: (tx: Prisma.TransactionClient) => Promise<{ count: number }>,
   ): Promise<PostView> {
-    await this.assertExists(postId);
+    const post = await this.assertExists(postId);
+    const event = {
+      recipientId: post.authorId,
+      actorId: userId,
+      type: reaction,
+      postId,
+    };
 
     await this.prisma.$transaction(async (tx) => {
       const { count } = await change(tx);
       if (count === 0) return;
       await tx.post.update({
         where: { id: postId },
-        data: { [counter]: { increment: delta } },
+        data: { [COUNTER[reaction]]: { increment: delta } },
       });
+      if (delta === 1) await addNotification(tx, event);
+      else await removeNotification(tx, event);
     });
 
     return this.view(postId, userId);

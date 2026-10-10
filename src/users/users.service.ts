@@ -11,6 +11,10 @@ import {
   toPage,
 } from '../common/pagination.js';
 import type { User } from '../generated/prisma/client.js';
+import {
+  addNotification,
+  removeNotification,
+} from '../notifications/notification-events.js';
 import { isUniqueViolation } from '../prisma/prisma-errors.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
@@ -92,6 +96,11 @@ export class UsersService {
         where: { id: target.id },
         data: { followersCount: { increment: 1 } },
       });
+      await addNotification(tx, {
+        recipientId: target.id,
+        actorId: followerId,
+        type: 'follow',
+      });
     });
 
     return this.getProfile(target.handle, followerId);
@@ -116,6 +125,11 @@ export class UsersService {
       await tx.user.update({
         where: { id: target.id },
         data: { followersCount: { decrement: 1 } },
+      });
+      await removeNotification(tx, {
+        recipientId: target.id,
+        actorId: followerId,
+        type: 'follow',
       });
     });
 
