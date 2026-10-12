@@ -32,6 +32,8 @@ npm run start:dev        # API en http://localhost:3001/api
 | `npm run db:migrate` | Crea y aplica una migración a partir de los cambios en `prisma/schema.prisma` |
 | `npm run db:generate` | Regenera el cliente de Prisma en `src/generated/` |
 | `npm run db:studio` | Abre un explorador de la base de datos |
+| `npm run abi:sync` | Copia los eventos de los contratos compilados a `src/launchpad/abi.ts` |
+| `npm run launchpad:reset -- <cadena>` | Borra lo indexado de una cadena para leerla de nuevo |
 
 Después de `npm run db:migrate` hay que ejecutar `npm run db:generate` para que el código vea los modelos nuevos.
 
@@ -46,6 +48,8 @@ src/users/             Perfiles y follows
 src/posts/             Posts, replies, likes, reposts y extracción de hashtags
 src/feed/              Timelines, tendencias y sugerencias de a quién seguir
 src/notifications/     Notificaciones
+src/launchpad/         Lanzamientos de tokens: indexador de la cadena y rutas
+scripts/               Utilidades de desarrollo
 src/common/            Piezas compartidas, como la paginación
 src/health/            Comprobación de estado
 test/                  Tests e2e
@@ -172,6 +176,58 @@ Una notificación tiene esta forma:
 - Nadie recibe notificaciones de lo que se hace a sí mismo. Una reply que además menciona al autor del post genera una sola notificación, de tipo `reply`.
 - Al deshacer lo que causó una notificación (quitar el like, dejar de seguir, borrar el post), la notificación desaparece.
 - Una mención es `@` seguido de un handle; no distingue mayúsculas.
+
+## Launchpad
+
+Los lanzamientos de tokens viven en los contratos de `somewhere.finance-contracts`. La API no los crea ni los modifica: un indexador copia a PostgreSQL lo que ocurre en la cadena, leyendo los eventos de los contratos, y las rutas sirven esa copia. Crear un lanzamiento, contribuir, retirar tokens y pedir un reembolso son transacciones que la wallet del usuario envía a los contratos.
+
+| Ruta | Sesión | Qué hace |
+|---|---|---|
+| `GET /api/launches` | Opcional | Lanzamientos, del más reciente al más antiguo, paginados |
+| `GET /api/launches/chains` | No | Cadenas configuradas, con la dirección del contrato `Launchpad` de cada una |
+| `GET /api/launches/:id` | Opcional | Un lanzamiento |
+| `PATCH /api/launches/:id` | Sí | Pone la descripción y la imagen; solo el usuario dueño de la wallet que lo creó |
+
+Filtros de la lista: `chain` (clave de la cadena), `status` (`upcoming`, `live` o `ended`), `creator` (dirección de wallet) y `q` (texto en el nombre o el símbolo).
+
+Sobre la respuesta:
+
+- **Los importes son cadenas de texto** en la unidad mínima (wei para la moneda nativa, 18 decimales para el token), porque no caben en un número.
+- `status` es `upcoming`, `live`, `succeeded`, `failed` o `finalized`, calculado en cada petición con la misma lógica que el contrato: una venta cambia de estado al pasar el tiempo, sin que haya ningún evento.
+- `finalizeBy` indica hasta cuándo se puede listar una venta exitosa. Pasado ese plazo de 7 días la venta pasa a fallida.
+- `myContribution` es lo que aportó el usuario de la sesión con sus wallets, y si ya retiró tokens o reembolso.
+- `creator.user` es el perfil de Somewhere del creador, si su wallet pertenece a algún usuario.
+- La descripción y la imagen son lo único que no está en la cadena.
+
+### Configurar las cadenas
+
+`EVM_CHAINS` es una lista JSON con las cadenas a leer. Vacía, la API funciona sin Launchpad.
+
+```json
+[{
+  "key": "sepolia",
+  "chainId": 11155111,
+  "name": "Sepolia",
+  "nativeSymbol": "ETH",
+  "rpcUrl": "https://…",
+  "launchpad": "0x…",
+  "startBlock": 0,
+  "confirmations": 5
+}]
+```
+
+- `launchpad` es la dirección del contrato desplegado y `startBlock` el bloque en que se desplegó.
+- `confirmations` es cuántos bloques espera el indexador antes de leer uno. Lo que el indexador lee no lo deshace, así que en una red real tiene que ser lo bastante alto para que el bloque ya no pueda cambiar. Solo una cadena local admite `0`.
+- Si una cadena reemplaza un bloque ya leído, el indexador se detiene y lo dice en el log.
+
+### Desarrollo con una cadena local
+
+1. En `somewhere.finance-contracts`: `npm run node` (déjalo abierto) y, en otra terminal, `npm run demo:local`. El segundo crea un Launchpad con tres lanzamientos de ejemplo e imprime la línea `EVM_CHAINS=…`.
+2. Pega esa línea en el `.env` de este proyecto y arranca la API.
+
+Cada vez que se reinicia la cadena local empieza de cero, y hay que borrar lo indexado de la anterior: `npm run launchpad:reset -- local`.
+
+Si cambia un evento de los contratos, `npm run abi:sync` regenera `src/launchpad/abi.ts` a partir de los contratos compilados.
 
 ## Paginación
 

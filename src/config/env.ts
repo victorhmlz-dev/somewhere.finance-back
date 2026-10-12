@@ -1,9 +1,15 @@
+import { type EvmChainConfig, parseEvmChains } from './evm-chains.js';
+
 export interface Env {
   PORT: number;
   FRONT_URL: string;
   DATABASE_URL: string;
   JWT_SECRET: string;
   JWT_EXPIRES_IN_SECONDS: number;
+  /** Chains the launchpad is read from. Empty when none is configured. */
+  EVM_CHAINS: EvmChainConfig[];
+  /** How often each chain is checked for new blocks. */
+  INDEXER_POLL_MS: number;
 }
 
 const ONE_WEEK_IN_SECONDS = 60 * 60 * 24 * 7;
@@ -40,11 +46,18 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     throw new Error('JWT_EXPIRES_IN_SECONDS must be an integer of at least 60');
   }
 
+  const indexerPollMs = Number(raw.INDEXER_POLL_MS ?? 4000);
+  if (!Number.isInteger(indexerPollMs) || indexerPollMs < 250) {
+    throw new Error('INDEXER_POLL_MS must be an integer of at least 250');
+  }
+
   return {
     PORT: port,
     FRONT_URL: frontUrl,
     DATABASE_URL: databaseUrl,
     JWT_SECRET: jwtSecret,
     JWT_EXPIRES_IN_SECONDS: jwtExpiresIn,
+    EVM_CHAINS: parseEvmChains(raw.EVM_CHAINS),
+    INDEXER_POLL_MS: indexerPollMs,
   };
 }

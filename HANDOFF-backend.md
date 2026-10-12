@@ -55,7 +55,7 @@ Scrollytelling WebGL. Next.js 16.3.5, React 19.2, three con React Three Fiber, z
 
 ### `somewhere.finance-front`
 
-Next.js 15 (App Router), React 19, JavaScript, CSS plano con BEM, alias `@/` a la raíz. Sin dependencias aparte de Next y React. La parte social está conectada a la API (2026-10-11); todo lo de mercado sigue saliendo de los mocks de `data/`.
+Next.js 15 (App Router), React 19, JavaScript, CSS plano con BEM, alias `@/` a la raíz. Una sola dependencia aparte de Next y React: `viem`, fijada a una versión exacta y usada únicamente dentro de `lib/chain/`. La parte social (2026-10-11) y el Launchpad (2026-10-12) están conectados a la API; el resto de lo de mercado sigue saliendo de los mocks de `data/`.
 
 Conectado a la API:
 
@@ -64,20 +64,25 @@ Conectado a la API:
 - Perfil propio (`/profile`) y de otros (`/profile/[handle]`), con editar perfil y follow.
 - Notificaciones con sus pestañas y el contador de no leídas en el menú; tendencias y sugerencias de a quién seguir en el lateral y en Explore.
 - Cliente de la API en `lib/api/apiClient.js` y una función por ruta en `lib/services/social/`. La URL sale de `NEXT_PUBLIC_API_URL` y por defecto es `http://localhost:3001/api`.
+- Launchpad: lista con filtro por estado (`/launchpad`), página de un lanzamiento (`/launchpad/[id]`) y formulario para crear uno (`/launchpad/new`). Comprar, listar el token, retirar tokens y pedir el reembolso son transacciones que firma la wallet del navegador; el código está en `lib/chain/launchpadActions.js`. Cada transacción se simula antes de pedir la firma, y los rechazos del contrato se traducen a mensajes en `lib/chain/chainError.js`. Las redes y la dirección del contrato vienen de la API, no de variables del front. `npm run abi:sync` regenera `lib/chain/abi.js` desde los contratos compilados.
 - Dos hooks cargan los datos: `hooks/shared/usePaginatedList.js` (listas con cursor) y `hooks/shared/useAsyncData.js` (un valor).
 
 Sigue con mocks o sin acción:
 
-- Collections, Auctions, Launchpad y Trading enteros.
+- Collections, Auctions y Trading enteros.
 - En el perfil propio, las pestañas Trading, History, Balances y Portfolio. En el perfil de otro usuario solo se muestra Posts.
 - En Explore, la noticia destacada, "Today's news" y las pestañas NFTs, Tokens y Creators. En el feed, el carrusel de arriba.
 - Los buscadores, y los botones Place Bid, Buy Now, Mint, comprar y vender.
+- En el Launchpad no hay todavía pantalla para que el creador cobre su vesting ni para retirar la comisión; los contratos lo permiten, falta la interfaz. Tampoco existen los lanzamientos de NFT y NFFC que mostraba la maqueta, ni los "boosts".
 
 Límites conocidos:
 
 - Solo se usa la primera wallet que el navegador inyecta. Elegir entre varias extensiones (EIP-6963), WalletConnect y wallets móviles quedan para la fase cripto.
 - Las imágenes de posts y avatares se indican con un enlace; no hay subida.
 - En desarrollo, React ejecuta cada carga dos veces, así que las views suben el doble que en producción.
+- viem añade unos 95 KB a las páginas de un lanzamiento y de crear uno; la lista casi no cambia. Se podría reducir cargándola solo al pulsar un botón.
+- Para enviar transacciones a una red, la wallet tiene que conocerla. El front pide el cambio de red, pero no la añade: si no está, muestra un mensaje.
+- El Launchpad se probó en el navegador con una wallet simulada que firma contra la cadena local, no con MetaMask real.
 
 Organización del código:
 
@@ -99,7 +104,8 @@ Hecho:
 - Posts (2026-10-11): publicar, ver y borrar posts, replies, likes y reposts, y la lista de posts de un usuario. Tablas `posts`, `likes` y `reposts`; los contadores de replies, reposts, likes y views viven en la fila del post. Las rutas y la forma de un post están en el `README.md`.
 - Feeds (2026-10-11): timelines "Discover", "My network", perfil y hashtag; tendencias de las últimas 24 horas y sugerencias de a quién seguir. Tabla `post_hashtags`, que se rellena al publicar. Posts y reposts se mezclan en una sola timeline con una consulta SQL directa en `src/feed/feed.service.ts`.
 - Notificaciones (2026-10-11): tipos `like`, `repost`, `follow`, `mention` y `reply`; lista paginada con pestañas, contador de no leídas y marcar todo como leído. La tabla `notifications` guarda una fila por hecho; las filas se agrupan al leerlas ("Aria y 12 más") con una consulta SQL directa en `src/notifications/notifications.service.ts`. Cada fila se crea y se borra dentro de la transacción de lo que la causa (`src/notifications/notification-events.ts`).
-- Tests unitarios de la firma, del entorno y de la extracción de hashtags y menciones; tests e2e de auth, health, users, posts, feed y notifications contra la base de datos real. Los e2e corren un archivo detrás de otro porque comparten base de datos.
+- Launchpad (2026-10-12): un indexador (`src/launchpad/launch-indexer.service.ts`) copia a PostgreSQL los eventos de los contratos de `somewhere.finance-contracts`, y `/api/launches` sirve esa copia con filtros. Tablas `launches`, `launch_contributions`, `chain_events` (cada evento procesado, una sola vez) y `chain_cursors`. Las cadenas se configuran en `EVM_CHAINS`; vacía, no hay Launchpad. El estado de una venta se calcula en cada petición con la misma lógica que el contrato (`src/launchpad/launch-status.ts`). Verificado contra una cadena local con los contratos reales, además de los tests.
+- Tests unitarios de la firma, del entorno, de la configuración de cadenas, del estado de un lanzamiento y de la extracción de hashtags y menciones; tests e2e de auth, health, users, posts, feed, notifications y launchpad contra la base de datos real. Los del launchpad usan una cadena falsa en memoria (`test/fake-chain.ts`). Los e2e corren un archivo detrás de otro porque comparten base de datos.
 - `.gitattributes` fija los finales de línea de `prisma/migrations/` en LF. Prisma guarda una huella de cada migración aplicada; si el archivo cambia aunque sea de finales de línea, `prisma migrate dev` pide reiniciar la base de datos.
 
 Límites conocidos de lo hecho:
@@ -114,6 +120,9 @@ Límites conocidos de lo hecho:
 - Las notificaciones se consultan por petición; no hay tiempo real (WebSocket o SSE) ni se pueden marcar como leídas de una en una.
 - El tipo `reply` no está en los mocks del front, que solo conocen `like`, `repost`, `follow`, `sale`, `bid` y `mention`. El front tendrá que pintarlo, por ejemplo igual que una mención. Los tipos `sale` y `bid` llegarán con el marketplace.
 - Los mocks del front usan `postText` en las notificaciones de like y repost; la API da el post entero en `post`.
+- El indexador solo lee bloques ya confirmados y nunca deshace lo leído. Si una cadena reemplaza un bloque indexado, se detiene y hay que subir `confirmations` y reindexar (`npm run launchpad:reset -- <cadena>`).
+- Los números de bloque se guardan como enteros de 32 bits. Bastan para años, pero una cadena de bloques muy rápidos como Robinhood Chain los agotaría en torno a 7 años.
+- Nadie finaliza todavía las ventas exitosas automáticamente; si nadie llama a `finalize` en 7 días, la venta pasa a fallida. Falta una tarea que lo haga, que necesitará una wallet con fondos en el servidor.
 - No se puede borrar una cuenta. Cuando se pueda, habrá que ajustar los contadores de follows de los demás usuarios, porque el borrado en cascada no los toca.
 
 Requisitos de la máquina: Node 22.22.3 o superior para el CLI de NestJS (`npm run build`, `npm run start:dev`) y Docker Desktop en marcha para la base de datos y los tests e2e. Desde el 2026-10-10 la máquina tiene Node 26.
@@ -190,8 +199,9 @@ El 2026-10-11 el usuario decidió pasar a lo cripto. El Launchpad tiene sus cont
 
 1. Desplegar en Sepolia. Los parámetros están en `ignition/parameters/sepolia.json`, a falta de la dirección pública de la wallet de despliegue. El usuario tiene que guardar la URL del nodo y las claves en el almacén de Hardhat y lanzar él mismo el comando de despliegue.
 2. Probar un lanzamiento a mano en Sepolia con las wallets de prueba.
-3. Back: un módulo que escuche los eventos del Launchpad (`LaunchCreated`, `Contributed`, `Finalized`, `Claimed`, `Refunded`, `FeeCollected`, `VestingStarted`, `Released`) y los guarde en PostgreSQL, con rutas para listar y filtrar lanzamientos, y una tarea que finalice las ventas exitosas dentro del plazo de 7 días.
-4. Front: la página Launchpad con datos reales, y los flujos de crear un lanzamiento, contribuir, retirar tokens y pedir el reembolso. Aquí sí hará falta una librería para enviar transacciones.
+3. Back: hecho el indexador y las rutas (2026-10-12). Falta la tarea que finalice las ventas exitosas dentro del plazo de 7 días.
+4. Front: hecho (2026-10-12) con viem, decisión del usuario. Para desarrollar: `npm run node` y `npm run demo:local` en contratos, y pegar en el `.env` del back la línea `EVM_CHAINS` que imprime.
+5. Lo que queda del Launchpad: desplegar en Sepolia y probar con MetaMask real; la tarea del back que finaliza ventas; las pantallas de vesting y de comisión; y la auditoría antes de cualquier red real.
 
 Después: Somewhere Parabolic y el Trust Graph. Lo de NFT queda pendiente.
 

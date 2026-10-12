@@ -201,3 +201,132 @@ model AuthChallenge {
   @@index([family, address])
   @@map("auth_challenges")
 }
+
+// ---------------------------------------------------------------------------
+// Launchpad. Everything below is a copy of what the contracts of
+// somewhere.finance-contracts hold on chain, built by reading their events.
+// The chain is the source of truth; these tables exist to list and filter.
+// Amounts are in the smallest unit (wei) and can be as large as a uint256.
+// ---------------------------------------------------------------------------
+
+// One row per launch created through a Launchpad contract.
+model Launch {
+  id       String @id @default(uuid(7)) @db.Uuid
+  // Which configured chain it lives on, e.g. "ethereum" (see EVM_CHAINS).
+  chainKey String @map("chain_key") @db.VarChar(32)
+  // Number of the launch inside its Launchpad contract.
+  launchId Int    @map("launch_id")
+
+  // Addresses are stored in lowercase.
+  tokenAddress   String @map("token_address") @db.VarChar(42)
+  saleAddress    String @map("sale_address") @db.VarChar(42)
+  vestingAddress String @map("vesting_address") @db.VarChar(42)
+  creatorAddress String @map("creator_address") @db.VarChar(42)
+
+  // Fixed when the launch is created.
+  name                 String   @db.VarChar(100)
+  symbol               String   @db.VarChar(32)
+  totalSupply          Decimal  @map("total_supply") @db.Decimal(78, 0)
+  tokensForSale        Decimal  @map("tokens_for_sale") @db.Decimal(78, 0)
+  creatorAllocation    Decimal  @map("creator_allocation") @db.Decimal(78, 0)
+  softCap              Decimal  @map("soft_cap") @db.Decimal(78, 0)
+  hardCap              Decimal  @map("hard_cap") @db.Decimal(78, 0)
+  minContribution      Decimal  @map("min_contribution") @db.Decimal(78, 0)
+  maxContribution      Decimal  @map("max_contribution") @db.Decimal(78, 0)
+  startTime            DateTime @map("start_time") @db.Timestamptz(0)
+  endTime              DateTime @map("end_time") @db.Timestamptz(0)
+  creatorAllocationBps Int      @map("creator_allocation_bps")
+  liquidityBps         Int      @map("liquidity_bps")
+  feeBps               Int      @map("fee_bps")
+  vestingTranches      Int      @map("vesting_tranches")
+
+  // Kept up to date from the events of the sale.
+  totalRaised      Decimal   @default(0) @map("total_raised") @db.Decimal(78, 0)
+  contributorCount Int       @default(0) @map("contributor_count")
+  hardCapReachedAt DateTime? @map("hard_cap_reached_at") @db.Timestamptz(0)
+
+  // Set when the sale is finalized.
+  finalizedAt     DateTime? @map("finalized_at") @db.Timestamptz(0)
+  pairAddress     String?   @map("pair_address") @db.VarChar(42)
+  liquidityNative Decimal?  @map("liquidity_native") @db.Decimal(78, 0)
+  liquidityTokens Decimal?  @map("liquidity_tokens") @db.Decimal(78, 0)
+  creatorNative   Decimal?  @map("creator_native") @db.Decimal(78, 0)
+  fee             Decimal?  @db.Decimal(78, 0)
+  tokensBurned    Decimal?  @map("tokens_burned") @db.Decimal(78, 0)
+  feeCollectedAt  DateTime? @map("fee_collected_at") @db.Timestamptz(0)
+
+  // What the creator's vesting has paid out so far.
+  vestingReleasedNative Decimal @default(0) @map("vesting_released_native") @db.Decimal(78, 0)
+  vestingReleasedTokens Decimal @default(0) @map("vesting_released_tokens") @db.Decimal(78, 0)
+
+  // Written by the creator through the API; not on chain.
+  description String  @default("") @db.VarChar(280)
+  imageUrl    String? @map("image_url")
+
+  // Where and when the launch was created on chain.
+  createdAt     DateTime @map("created_at") @db.Timestamptz(0)
+  createdBlock  Int      @map("created_block")
+  createdTxHash String   @map("created_tx_hash") @db.VarChar(66)
+
+  contributions LaunchContribution[]
+
+  @@unique([chainKey, launchId])
+  @@index([chainKey, saleAddress])
+  @@index([chainKey, vestingAddress])
+  @@index([creatorAddress])
+  @@map("launches")
+}
+
+// What one address has put into one launch, and what it got back.
+model LaunchContribution {
+  id          String  @id @default(uuid(7)) @db.Uuid
+  launchRowId String  @map("launch_row_id") @db.Uuid
+  contributor String  @db.VarChar(42)
+  // Everything the address contributed. Not reduced by a claim or a refund.
+  amount      Decimal @db.Decimal(78, 0)
+
+  claimedTokens  Decimal?  @map("claimed_tokens") @db.Decimal(78, 0)
+  claimedAt      DateTime? @map("claimed_at") @db.Timestamptz(0)
+  refundedAmount Decimal?  @map("refunded_amount") @db.Decimal(78, 0)
+  refundedAt     DateTime? @map("refunded_at") @db.Timestamptz(0)
+
+  firstContributedAt DateTime @map("first_contributed_at") @db.Timestamptz(0)
+
+  launch Launch @relation(fields: [launchRowId], references: [id], onDelete: Cascade)
+
+  @@unique([launchRowId, contributor])
+  @@index([contributor])
+  @@map("launch_contributions")
+}
+
+// Every contract event the indexer has processed, exactly once. It is the
+// evidence behind the two tables above: what happened, where, and when.
+model ChainEvent {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  chainKey    String   @map("chain_key") @db.VarChar(32)
+  blockNumber Int      @map("block_number")
+  blockHash   String   @map("block_hash") @db.VarChar(66)
+  blockTime   DateTime @map("block_time") @db.Timestamptz(0)
+  txHash      String   @map("tx_hash") @db.VarChar(66)
+  logIndex    Int      @map("log_index")
+  // The contract that emitted it, in lowercase.
+  address     String   @db.VarChar(42)
+  name        String   @db.VarChar(64)
+  // Decoded arguments, with numbers as strings.
+  args        Json
+
+  @@unique([chainKey, txHash, logIndex])
+  @@index([chainKey, address])
+  @@map("chain_events")
+}
+
+// How far the indexer has read each chain.
+model ChainCursor {
+  chainKey  String   @id @map("chain_key") @db.VarChar(32)
+  // Last block fully processed.
+  lastBlock Int      @map("last_block")
+  lastHash  String   @map("last_hash") @db.VarChar(66)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("chain_cursors")
+}

@@ -5,6 +5,7 @@ import { AuthModule } from './auth/auth.module.js';
 import { validateEnv } from './config/env.js';
 import { FeedModule } from './feed/feed.module.js';
 import { HealthModule } from './health/health.module.js';
+import { LaunchpadModule } from './launchpad/launchpad.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { PostsModule } from './posts/posts.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -20,6 +21,7 @@ import { UsersModule } from './users/users.module.js';
     PostsModule,
     FeedModule,
     NotificationsModule,
+    LaunchpadModule,
   ],
   providers: [
     {

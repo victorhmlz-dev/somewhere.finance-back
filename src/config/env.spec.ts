@@ -12,6 +12,8 @@ describe('validateEnv', () => {
       PORT: 3001,
       FRONT_URL: 'http://localhost:3000',
       JWT_EXPIRES_IN_SECONDS: 604800,
+      EVM_CHAINS: [],
+      INDEXER_POLL_MS: 4000,
     });
   });
 

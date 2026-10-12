@@ -11,7 +11,10 @@ export interface TestSession {
 
 /** Requests to the API, sent as `session` or anonymously without one. */
 export function apiClient(app: INestApplication<App>, session?: TestSession) {
-  const send = (method: 'get' | 'post' | 'put' | 'delete', path: string) => {
+  const send = (
+    method: 'get' | 'post' | 'put' | 'patch' | 'delete',
+    path: string,
+  ) => {
     const req = request(app.getHttpServer())[method](path);
     return session
       ? req.set('Authorization', `Bearer ${session.accessToken}`)
@@ -21,6 +24,7 @@ export function apiClient(app: INestApplication<App>, session?: TestSession) {
     get: (path: string) => send('get', path),
     post: (path: string) => send('post', path),
     put: (path: string) => send('put', path),
+    patch: (path: string) => send('patch', path),
     delete: (path: string) => send('delete', path),
   };
 }
