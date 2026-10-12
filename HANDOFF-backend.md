@@ -41,7 +41,7 @@ Estado de la regla en cada parte:
 
 ## 3. Estado actual
 
-Carpeta raíz: `D:\Projects\somewhere.finance\`. No es un repo; contiene tres repos independientes en `github.com/victorhmlz-dev`.
+Carpeta raíz: `D:\Projects\somewhere.finance\`. No es un repo; contiene los proyectos, cada uno con su propio repo en `github.com/victorhmlz-dev`.
 
 ### `landing`
 
@@ -55,15 +55,34 @@ Scrollytelling WebGL. Next.js 16.3.5, React 19.2, three con React Three Fiber, z
 
 ### `somewhere.finance-front`
 
-Maqueta sin funcionalidad real. Next.js 15 (App Router), React 19, JavaScript, CSS plano con BEM, alias `@/` a la raíz.
+Next.js 15 (App Router), React 19, JavaScript, CSS plano con BEM, alias `@/` a la raíz. Sin dependencias aparte de Next y React. La parte social está conectada a la API (2026-10-11); todo lo de mercado sigue saliendo de los mocks de `data/`.
 
-- No hay backend, wallet, fetch ni llamadas a cadena. Todo sale de los mocks de `data/`.
-- Rutas: `/` (feed), `/explore`, `/collections`, `/auctions`, `/launchpad`, `/trading`, `/notifications`, `/profile`. No hay rutas dinámicas de detalle.
-- Estructura paralela por página: `components/pages/<pagina>/`, `data/pages/<pagina>/`, `hooks/pages/<pagina>/`, `styles/components/pages/<pagina>/`.
-- `lib/services/` tiene tres funciones asíncronas que devuelven mocks y que nadie importa. Es el punto natural para conectar la API.
-- `lib/blockchain/` tiene cuatro módulos (uno por cadena) que solo lanzan "not implemented yet".
-- `.env.example` define el nombre y la URL de la app y una URL de RPC por cadena. No hay variable para la URL del back.
-- Botones sin acción: Connect Wallet, Post, Follow, Place Bid, Buy Now, Mint, Edit profile, comprar y vender.
+Conectado a la API:
+
+- Connect Wallet: login por firma con la wallet inyectada en el navegador (`window.ethereum` para EVM, `window.phantom.solana` para Solana), sin librerías. Código en `lib/wallet/`. La sesión vive en `components/providers/SessionProvider.jsx` (`useSession()`), con el token en `localStorage`.
+- Feed con "Discover" y "My network", publicar, like, repost, borrar; página de un post con sus replies (`/post/[id]`); página de un hashtag (`/hashtag/[tag]`).
+- Perfil propio (`/profile`) y de otros (`/profile/[handle]`), con editar perfil y follow.
+- Notificaciones con sus pestañas y el contador de no leídas en el menú; tendencias y sugerencias de a quién seguir en el lateral y en Explore.
+- Cliente de la API en `lib/api/apiClient.js` y una función por ruta en `lib/services/social/`. La URL sale de `NEXT_PUBLIC_API_URL` y por defecto es `http://localhost:3001/api`.
+- Dos hooks cargan los datos: `hooks/shared/usePaginatedList.js` (listas con cursor) y `hooks/shared/useAsyncData.js` (un valor).
+
+Sigue con mocks o sin acción:
+
+- Collections, Auctions, Launchpad y Trading enteros.
+- En el perfil propio, las pestañas Trading, History, Balances y Portfolio. En el perfil de otro usuario solo se muestra Posts.
+- En Explore, la noticia destacada, "Today's news" y las pestañas NFTs, Tokens y Creators. En el feed, el carrusel de arriba.
+- Los buscadores, y los botones Place Bid, Buy Now, Mint, comprar y vender.
+
+Límites conocidos:
+
+- Solo se usa la primera wallet que el navegador inyecta. Elegir entre varias extensiones (EIP-6963), WalletConnect y wallets móviles quedan para la fase cripto.
+- Las imágenes de posts y avatares se indican con un enlace; no hay subida.
+- En desarrollo, React ejecuta cada carga dos veces, así que las views suben el doble que en producción.
+
+Organización del código:
+
+- Estructura paralela por página: `components/pages/<pagina>/`, `data/pages/<pagina>/`, `hooks/pages/<pagina>/`, `styles/components/pages/<pagina>/`. Lo compartido va en `components/shared/`, `hooks/shared/` y `styles/components/shared/`.
+- `lib/services/pages/` (tres funciones que devuelven mocks) y `lib/blockchain/` (cuatro módulos que solo lanzan "not implemented yet") siguen sin usarse.
 
 ### `somewhere.finance-back`
 
@@ -97,7 +116,41 @@ Límites conocidos de lo hecho:
 - Los mocks del front usan `postText` en las notificaciones de like y repost; la API da el post entero en `post`.
 - No se puede borrar una cuenta. Cuando se pueda, habrá que ajustar los contadores de follows de los demás usuarios, porque el borrado en cascada no los toca.
 
-Requisitos de la máquina: Node 22.22.3 o superior para el CLI de NestJS (`npm run build`, `npm run start:dev`) y Docker Desktop en marcha para la base de datos y los tests e2e. El 2026-10-10 la máquina tenía Node 22.13.0 y el usuario iba a actualizarlo.
+Requisitos de la máquina: Node 22.22.3 o superior para el CLI de NestJS (`npm run build`, `npm run start:dev`) y Docker Desktop en marcha para la base de datos y los tests e2e. Desde el 2026-10-10 la máquina tiene Node 26.
+
+### `somewhere.finance-contracts`
+
+Contratos para lanzar tokens fungibles en las cadenas EVM, empezados el 2026-10-11. Solidity 0.8.28, Hardhat 3, OpenZeppelin 5; tests en TypeScript con viem y en Solidity con forge-std. El `README.md` resume las reglas y `docs/ARCHITECTURE.md` contiene la auditoría, el diseño, las invariantes y el estado.
+
+El usuario aportó una especificación (`docs/prompt.txt` y `docs/public.txt` en la carpeta raíz, escritas con ChatGPT) que define el alcance y **el proceso a seguir**: auditar, proponer, esperar aprobación, implementar por etapas pequeñas e informar solo de las pruebas realmente ejecutadas. No se debe prometer que el protocolo elimina el fraude.
+
+Productos previstos:
+
+- **Somewhere Launchpad**, ventas a precio fijo. Implementado.
+- **Somewhere Parabolic**, lanzamientos con curva de precio. Sin empezar; arquitectura aparte.
+- **Somewhere Trust Graph**, reputación de creadores y puntuación técnica de tokens. Sin empezar; es sobre todo backend.
+
+Reglas del Launchpad, decididas por el usuario y forzadas por el contrato:
+
+- Al menos el 70% de lo recaudado va a liquidez, bloqueada para siempre (los tokens del pool van a `0x…dEaD`).
+- El resto, menos la comisión, va al creador con vesting: tramos mensuales iguales, mínimo 3 y máximo 48, el primero a los 30 días del listado. Los tokens del creador (hasta el 1% del supply) siguen el mismo calendario.
+- Comisión del 0,5%, con tope del 1%. Queda apartada en la venta y se retira con `collectFee`.
+- Venta fallida: reembolso íntegro y sin comisión. Si una venta exitosa no se lista en 7 días, pasa a fallida sola.
+- Mínimo y máximo por wallet, opcionales. Lo que no cabe se devuelve en la misma transacción.
+- El token se lista al precio de la venta. Sin proxies ni actualizaciones.
+- Cuanto más largo el vesting, mejor puntuación tendrá el token en el Trust Graph.
+
+Estado al 2026-10-12: 67 tests pasan en la red simulada (51 unitarios, 7 de fuzzing y 9 invariantes), y se comprobó con seis fallos deliberados que los detectan. Además, 3 tests ejecutan un lanzamiento completo contra el Uniswap V2 real de Sepolia sobre una copia local de esa cadena (`npm run test:fork`, con `SEPOLIA_FORK_URL`).
+
+Secretos: las URL de nodo y las claves de despliegue van en el almacén cifrado de Hardhat (`npx hardhat keystore set <NOMBRE>`), nunca en archivos. `hardhat.config.ts` solo contiene los nombres: `SEPOLIA_RPC_URL`, `DEPLOYER_PRIVATE_KEY`, `TEST_WALLET_1_PRIVATE_KEY` y `TEST_WALLET_2_PRIVATE_KEY`. El 2026-10-12 el usuario pegó por error tres claves privadas de wallets de prueba en ese archivo; se retiraron antes de cualquier commit y el usuario decidió seguir usándolas solo para pruebas. Esas wallets no deben usarse nunca con fondos reales. Claude no ejecuta `keystore set` ni despliega: piden una contraseña tecleada a mano, así que lo hace el usuario.
+
+Límites conocidos:
+
+- Sin auditar y sin desplegar en ninguna red. No se ha pasado análisis estático.
+- Uniswap V2 tiene fábrica oficial en Sepolia (probada), BNB Chain y Robinhood Chain (sin probar); las direcciones están en el `README.md` del proyecto.
+- Una venta exitosa hay que finalizarla en 7 días; el backend tendrá que hacerlo automáticamente.
+- Solo EVM. Solana necesita programas propios en otro proyecto.
+- El back todavía no indexa los eventos de estos contratos y el front sigue mostrando el launchpad con mocks.
 
 ## 4. Lo que el front le exige al backend
 
@@ -119,7 +172,7 @@ Implicaciones:
 - **Dos naturalezas de dato.** Lo social es propio y vive en nuestra base de datos. Lo de mercado (precios, holders, trades, balances, floor) viene de las cadenas y habrá que indexarlo o tomarlo de proveedores.
 - **Tiempo real.** Subastas, trades, precio y notificaciones piden WebSocket o SSE.
 - **Filtros en servidor.** Los hooks `hooks/pages/collections/useCollectionFilters.js` y `hooks/pages/auctions/useAuctionFilters.js` ya definen los parámetros: búsqueda, tipo, cadenas, rango de precio en USD, antigüedad o tiempo restante, creador, solo verificadas, y orden.
-- **Reglas del launchpad** que el front promete: liquidez gestionada por contrato, enviada al exchange de la red (Uniswap, Raydium, PancakeSwap) y bloqueada; los desarrolladores retienen como máximo el 1% del supply. Robinhood Chain no tiene exchange asignado todavía.
+- **Reglas del launchpad** que el front promete: liquidez gestionada por contrato, enviada al exchange de la red (Uniswap, Raydium, PancakeSwap) y bloqueada; los desarrolladores retienen como máximo el 1% del supply. Robinhood Chain no tiene exchange asignado todavía. Los contratos de `somewhere.finance-contracts` ya hacen cumplir estas reglas en las cadenas EVM.
 
 ## 5. Decisiones tomadas
 
@@ -128,18 +181,29 @@ Implicaciones:
 3. Lenguaje y framework: TypeScript con NestJS. La duda entre TypeScript y JavaScript quedó resuelta así.
 4. Se empieza por la parte off-chain. Lo on-chain va después.
 5. Los NFFC se comunican como indica la sección 2.
+6. Los contratos van en un proyecto aparte, `somewhere.finance-contracts`, no en el backend.
+7. Orden de lo cripto (acordado el 2026-10-11): primero los tokens fungibles (Launchpad, después Parabolic, después Trust Graph). Subastas, compraventa de NFT y NFFC quedan pendientes para después. Se empieza por EVM en testnet; Solana será un proyecto aparte.
 
 ## 6. Siguiente trabajo
 
-El primer hito del backend (la parte social, off-chain) está completo. No hay un siguiente paso acordado; las opciones naturales son:
+El 2026-10-11 el usuario decidió pasar a lo cripto. El Launchpad tiene sus contratos escritos y probados en local; para que funcione de punta a punta falta, en este orden:
 
-- Conectar el front a lo que ya existe: cliente de API en `lib/services/`, variable de entorno con la URL del back y el flujo de Connect Wallet contra `/api/auth`. Es lo que haría visible todo lo construido.
+1. Desplegar en Sepolia. Los parámetros están en `ignition/parameters/sepolia.json`, a falta de la dirección pública de la wallet de despliegue. El usuario tiene que guardar la URL del nodo y las claves en el almacén de Hardhat y lanzar él mismo el comando de despliegue.
+2. Probar un lanzamiento a mano en Sepolia con las wallets de prueba.
+3. Back: un módulo que escuche los eventos del Launchpad (`LaunchCreated`, `Contributed`, `Finalized`, `Claimed`, `Refunded`, `FeeCollected`, `VestingStarted`, `Released`) y los guarde en PostgreSQL, con rutas para listar y filtrar lanzamientos, y una tarea que finalice las ventas exitosas dentro del plazo de 7 días.
+4. Front: la página Launchpad con datos reales, y los flujos de crear un lanzamiento, contribuir, retirar tokens y pedir el reembolso. Aquí sí hará falta una librería para enviar transacciones.
+
+Después: Somewhere Parabolic y el Trust Graph. Lo de NFT queda pendiente.
+
+Quedó aparcado de lo social, sin orden acordado:
+
 - Tiempo real para notificaciones y feeds.
 - Subida de imágenes para avatares y posts.
 - Las opiniones bullish/bearish de la terminal de trading, que son sociales pero cuelgan de un token.
-- Empezar el marketplace (colecciones, subastas, launchpad), que ya toca datos de cadena.
+- Buscador de usuarios y posts; listas de followers y following en el perfil (la API ya las da, el front no las muestra).
 
-Forma de trabajo: una rama por paso (`features/<tema>`), pull request a `main`, y la rama siguiente sale del `main` ya actualizado. Los commits y los merges los hace el usuario.
+Forma de trabajo: una rama por paso (`features/<tema>`) en cada repo que se toque, pull request a `main`, y la rama siguiente sale del `main` ya actualizado. Los commits y los merges los hace el usuario.
+
 ## 7. Análisis interno de los NFFC
 
 Valoración que se le dio al usuario cuando la pidió. Es material interno, escrito en términos técnicos a propósito; no es copy ni base para copy.
@@ -156,7 +220,7 @@ Valoración que se le dio al usuario cuando la pidió. Es material interno, escr
 Front:
 
 - Ocho componentes sin usar en `components/pages/feed/`, restos de una landing anterior: `ExploreChains`, `FeaturedNFTs`, `FinalCTA`, `HowItWorks`, `LiveAuctions`, `MarketplaceStats`, `TopCreators`, `TrendingCollections`.
-- `Footer` se importa en `app/layout.js` pero no se renderiza, y enlaza a `/creators`, que no existe.
+- `components/layout/Footer.jsx` no se usa en ningún sitio, y enlaza a `/creators`, que no existe.
 - Los logs de `.playwright-mcp/` están versionados en git.
 - Neon Bazaar aparece en BSC en collections y en Solana en launchpad.
 - Holders, trades y opiniones de la terminal son los mismos para cualquier token.
