@@ -24,6 +24,7 @@ describe('parseEvmChains', () => {
         launchpad: '0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0',
         startBlock: 0,
         confirmations: 0,
+        logBlockRange: 2000,
       },
     ]);
   });
@@ -37,6 +38,7 @@ describe('parseEvmChains', () => {
           nativeSymbol: 'SEP',
           startBlock: 100,
           confirmations: 5,
+          logBlockRange: 10,
         },
       ]),
     );
@@ -45,6 +47,7 @@ describe('parseEvmChains', () => {
       nativeSymbol: 'SEP',
       startBlock: 100,
       confirmations: 5,
+      logBlockRange: 10,
     });
   });
 
@@ -56,6 +59,11 @@ describe('parseEvmChains', () => {
     ['an invalid node URL', [{ ...chain, rpcUrl: 'nope' }], /rpcUrl/],
     ['an invalid address', [{ ...chain, launchpad: '0x123' }], /launchpad/],
     ['a negative start block', [{ ...chain, startBlock: -1 }], /startBlock/],
+    [
+      'a block range of zero',
+      [{ ...chain, logBlockRange: 0 }],
+      /logBlockRange/,
+    ],
     ['the same key twice', [chain, chain], /different key/],
   ])('rejects %s', (_case, value, error) => {
     const raw = typeof value === 'string' ? value : JSON.stringify(value);

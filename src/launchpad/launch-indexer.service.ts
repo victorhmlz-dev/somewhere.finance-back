@@ -6,7 +6,7 @@ import {
   OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { Hex } from 'viem';
+import { BaseError, type Hex } from 'viem';
 import type { Env } from '../config/env.js';
 import type { EvmChainConfig } from '../config/evm-chains.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -22,8 +22,6 @@ import {
   type LogSource,
 } from './launch-events.js';
 
-/** Blocks read per request to the node. */
-const BLOCKS_PER_BATCH = 2000;
 /** Contract addresses per request to the node. */
 const ADDRESSES_PER_REQUEST = 500;
 
@@ -33,6 +31,20 @@ const byPosition = (a: ChainLog, b: ChainLog) =>
     : a.blockNumber < b.blockNumber
       ? -1
       : 1;
+
+/**
+ * What went wrong, without the node URL: it usually carries the API key of
+ * the provider, and logs are read by more people than the .env file.
+ */
+function describeError(error: unknown, chain: EvmChainConfig): string {
+  const message =
+    error instanceof BaseError
+      ? [error.shortMessage, error.details].filter(Boolean).join(' ')
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  return message.replaceAll(chain.rpcUrl, '<node URL>');
+}
 
 /**
  * Copies what happens in the launchpad contracts into the database: it reads
@@ -103,7 +115,7 @@ export class LaunchIndexerService
     const first = from;
 
     while (from <= target && !this.stopped) {
-      const candidate = from + BigInt(BLOCKS_PER_BATCH) - 1n;
+      const candidate = from + BigInt(chain.logBlockRange) - 1n;
       const to = candidate < target ? candidate : target;
       await this.indexRange(chain, reader, from, to);
       from = to + 1n;
@@ -206,7 +218,7 @@ export class LaunchIndexerService
         await this.sync(chain, reader);
       } catch (error) {
         this.logger.error(
-          `Could not index ${chain.key}: ${(error as Error).message}`,
+          `Could not index ${chain.key}: ${describeError(error, chain)}`,
         );
       }
       if (!this.stopped) this.timers.set(chain.key, setTimeout(run, pollMs));

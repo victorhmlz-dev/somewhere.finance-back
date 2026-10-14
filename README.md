@@ -212,13 +212,16 @@ Sobre la respuesta:
   "rpcUrl": "https://…",
   "launchpad": "0x…",
   "startBlock": 0,
-  "confirmations": 5
+  "confirmations": 5,
+  "logBlockRange": 10
 }]
 ```
 
 - `launchpad` es la dirección del contrato desplegado y `startBlock` el bloque en que se desplegó.
 - `confirmations` es cuántos bloques espera el indexador antes de leer uno. Lo que el indexador lee no lo deshace, así que en una red real tiene que ser lo bastante alto para que el bloque ya no pueda cambiar. Solo una cadena local admite `0`.
+- `logBlockRange` es cuántos bloques pide el indexador al nodo de una vez (por defecto 2000). Los planes gratuitos de los proveedores lo limitan: en Alchemy gratis, a 10.
 - Si una cadena reemplaza un bloque ya leído, el indexador se detiene y lo dice en el log.
+- Los errores del indexador no muestran la URL del nodo, porque suele llevar la API key del proveedor.
 
 ### Desarrollo con una cadena local
 

@@ -201,7 +201,7 @@ El 2026-10-11 el usuario decidió pasar a lo cripto. El Launchpad tiene sus cont
 2. Probar un lanzamiento a mano en Sepolia con las wallets de prueba.
 3. Back: hecho el indexador y las rutas (2026-10-12). Falta la tarea que finalice las ventas exitosas dentro del plazo de 7 días.
 4. Front: hecho (2026-10-12) con viem, decisión del usuario. Para desarrollar: `npm run node` y `npm run demo:local` en contratos, y pegar en el `.env` del back la línea `EVM_CHAINS` que imprime.
-5. Lo que queda del Launchpad: desplegar en Sepolia y probar con MetaMask real; la tarea del back que finaliza ventas; las pantallas de vesting y de comisión; y la auditoría antes de cualquier red real.
+5. Desplegado en Sepolia el 2026-10-14: Launchpad en `0x83c968b3E5EeBaaBe78a6f5f9235207d942804e1`, bloque 11915040, verificado leyendo el contrato en la red. Lo que queda del Launchpad: probar con MetaMask real en Sepolia; la tarea del back que finaliza ventas; las pantallas de vesting y de comisión; y la auditoría antes de cualquier red real.
 
 Después: Somewhere Parabolic y el Trust Graph. Lo de NFT queda pendiente.
 

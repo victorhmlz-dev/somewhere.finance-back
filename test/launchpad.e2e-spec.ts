@@ -181,6 +181,7 @@ describe('Launchpad (e2e)', () => {
       launchpad,
       startBlock: 0,
       confirmations: 0,
+      logBlockRange: 2000,
     };
   });
 
@@ -396,6 +397,33 @@ describe('Launchpad (e2e)', () => {
       await indexer.sync(patient, chain);
       expect(await findLaunch(symbol)).toMatchObject({ symbol });
       await sync();
+    });
+
+    it('reads one block per request when the node only allows that', async () => {
+      const symbol = uniqueSymbol();
+      const launch = newLaunch({ symbol });
+      const narrow = { ...chainConfig, logBlockRange: 1 };
+      const requested: [bigint, bigint][] = [];
+      const reader = {
+        getBlockNumber: () => chain.getBlockNumber(),
+        getBlock: (n: bigint) => chain.getBlock(n),
+        getLogs: (range: Parameters<FakeChain['getLogs']>[0]) => {
+          requested.push([range.fromBlock, range.toBlock]);
+          return chain.getLogs(range);
+        },
+      };
+      await sync();
+
+      chain.mine([launch.created]);
+      chain.mine([launch.contributed(randomAddress(), '1', '1')]);
+      chain.mine([launch.contributed(randomAddress(), '2', '3')]);
+      expect(await indexer.sync(narrow, reader)).toBe(3);
+
+      expect(requested.every(([from, to]) => from === to)).toBe(true);
+      expect(await findLaunch(symbol)).toMatchObject({
+        totalRaised: parseEther('3').toString(),
+        contributorCount: 2,
+      });
     });
 
     it('stops when a block it had read is replaced', async () => {

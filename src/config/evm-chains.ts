@@ -17,6 +17,11 @@ export interface EvmChainConfig {
    * replaced by the chain, and what the indexer has read it never unreads.
    */
   confirmations: number;
+  /**
+   * Most blocks to ask the node for events at once. Providers limit it on
+   * their cheaper plans: Alchemy's free plan allows 10.
+   */
+  logBlockRange: number;
 }
 
 const KEY_PATTERN = /^[a-z0-9-]{1,32}$/;
@@ -62,6 +67,10 @@ export function parseEvmChains(raw: unknown): EvmChainConfig[] {
     if (!isCount(startBlock)) fail('startBlock must be a block number');
     const confirmations = entry.confirmations ?? 0;
     if (!isCount(confirmations)) fail('confirmations must be a number');
+    const logBlockRange = entry.logBlockRange ?? 2000;
+    if (!isCount(logBlockRange) || logBlockRange === 0) {
+      fail('logBlockRange must be a number of blocks, at least 1');
+    }
 
     return {
       key: key as string,
@@ -73,6 +82,7 @@ export function parseEvmChains(raw: unknown): EvmChainConfig[] {
       launchpad: (launchpad as string).toLowerCase() as `0x${string}`,
       startBlock: startBlock as number,
       confirmations: confirmations as number,
+      logBlockRange: logBlockRange as number,
     };
   });
 
