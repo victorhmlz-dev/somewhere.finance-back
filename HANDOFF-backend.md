@@ -109,7 +109,7 @@ Hecho:
 - Descripción e imagen de un lanzamiento (2026-10-15, decisión del usuario): se ponen juntas, una vez, por el creador y solo antes del inicio de la venta; nunca cambian. La imagen tiene que ser de la propia subida. Al crear, el front las manda con el hash de la transacción (`POST /api/launches/details`) y el back las guarda en `pending_launch_details` hasta que el indexador lee el lanzamiento. Esto arregla el fallo visto en Sepolia: el front esperaba al indexador solo 30 s y con 5 confirmaciones tardaba más, así que no guardaba nada.
 - Lista de tokens (2026-10-15): `GET /api/launches/token-list`, en el formato estándar de Uniswap (tokenlists.org), con los tokens listados y su logo. Validada en los tests contra el esquema oficial. Es la vía elegida para que wallets y exchanges muestren los logos; se descartó por ahora guardar la imagen en IPFS o enlazarla desde el contrato, porque la lista la controlamos nosotros igualmente y un servidor propio permite retirar imágenes ilegales o que suplanten a otros.
 - Cancelación (2026-10-15): estado `cancelled`, columna `cancelled_at` y evento `Cancelled` en el indexador. El filtro `ended` incluye las canceladas.
-- El indexador guarda en `chain_cursors.launchpad` el contrato que lee y se detiene si `EVM_CHAINS` nombra otro (2026-10-15).
+- Lo que la gente añade sobre un lanzamiento nunca se pierde al releer la cadena (2026-10-15, tras perderse descripciones e imágenes con un `launchpad:reset`; el usuario exigió que no pueda pasar en producción). `launches` es solo una copia de la cadena; la descripción y la imagen viven en `launch_profiles`, y comentarios, reacciones y notificaciones apuntan al id sin clave foránea. El id sale de la cadena (`src/launchpad/launch-id.ts`: UUIDv7 con hora del bloque, número y hash de cadena, contrato y número), así que releer da el mismo id. Las notificaciones de compra llevan `source_key` y no se repiten. Un cambio de `Launchpad` en `EVM_CHAINS` ya no exige reset: el indexador lee el nuevo y los lanzamientos del anterior se quedan sin mostrarse. `launchpad:reset` solo borra la copia y no corre con `NODE_ENV=production`.
 - Notificaciones de compra (2026-10-15): `launch_purchase` al creador ("@x bought your token") y `purchase` al comprador ("You bought N TOKEN for X ETH"), creadas por el indexador con la fecha del bloque. Una wallet sin perfil aparece por su dirección (`actorAddress`).
 - Zona social de los lanzamientos (2026-10-15, decisiones del usuario): un comentario es un post con `launch_id`; sus replies heredan el lanzamiento; salen también en los feeds. El creador recibe `launch_comment` por cada comentario o reply. Reacciones con emoji (tabla `reactions`, seis fijas: rocket, fire, gem, eyes, joy, thumbs_down) en posts y en lanzamientos, con notificación `reaction` al dueño.
 - Tests unitarios de la firma, del entorno, de la configuración de cadenas, del estado de un lanzamiento y de la extracción de hashtags y menciones; tests e2e de auth, health, users, posts, feed, notifications y launchpad contra la base de datos real. Los del launchpad usan una cadena falsa en memoria (`test/fake-chain.ts`). Los e2e corren un archivo detrás de otro porque comparten base de datos.
@@ -236,7 +236,30 @@ Valoración que se le dio al usuario cuando la pidió. Es material interno, escr
 - **Sugerencias:** que lo único sea la curación del creador con historial público; decidir pronto si es redimible; mirar ERC-6551 como base técnica.
 - Nada de esto bloquea el backend off-chain.
 
-## 8. Pendientes menores
+## 8. Riesgos de producción
+
+Evaluación hecha el 2026-10-15 a petición del usuario, tras perderse datos con un reset.
+
+Ya resuelto el 2026-10-15: base de datos propia para los tests e2e (`somewhere_finance_test`, con negativa a correr contra otra); `launchpad:reset` con confirmación y solo en local; límites de peticiones por IP y cuota diaria de imágenes; avatares e imágenes de posts solo con subidas propias; aviso en el front cuando la wallet que firma no es la de la sesión; números de bloque a 64 bits. Cada corrección de seguridad queda en el `SECURITY-HISTORY.md` de su repo (ignorado por git).
+
+Pendiente antes de abrir al público:
+
+- La tarea que lista las ventas exitosas (sin ella, una venta olvidada pasa a reembolso a los 7 días). Lo más urgente del producto.
+- Monitorización y alertas: errores (Sentry o similar), indexador parado o retrasado, proveedor de nodo caído.
+- Que solo un servidor indexe a la vez (bloqueo en PostgreSQL o proceso aparte) y contadores de límites en Redis si hay varios servidores.
+- Proveedor de nodo de pago y uno de reserva.
+- Almacenamiento de objetos (R2 o S3, con versiones) para las imágenes, y limpieza de las que nadie usa.
+- Copias de seguridad con restauración a cualquier momento (PITR), probadas.
+- Regla de migraciones: una migración aplicada nunca se edita; las destructivas, en dos pasos y ensayadas sobre una copia real.
+- Herramienta de moderación (retirar imágenes y comentarios, con registro) y denuncias.
+- Lista de tokens solo con tokens revisados y alertas de nombres que imitan a tokens conocidos.
+- Cabeceras de seguridad (CSP) en el front; valorar sesión en cookie `httpOnly` en vez de `localStorage`.
+- Valorar basar el id de un lanzamiento en el hash de su transacción en vez de la hora del bloque (resistente a reorganizaciones).
+- Gestor de secretos en los servidores; nunca reutilizar las wallets de prueba.
+
+Pendiente antes de dinero real: auditoría externa de los contratos, y dueño y receptor de comisiones del `Launchpad` en una multifirma (Safe).
+
+## 9. Pendientes menores
 
 Front:
 

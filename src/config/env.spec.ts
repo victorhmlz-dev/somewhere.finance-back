@@ -16,7 +16,20 @@ describe('validateEnv', () => {
       EVM_CHAINS: [],
       INDEXER_POLL_MS: 4000,
       UPLOAD_DIR: 'uploads',
+      UPLOAD_DAILY_LIMIT: 30,
+      RATE_LIMIT_ENABLED: true,
+      TRUST_PROXY: 0,
     });
+  });
+
+  it.each([
+    ['RATE_LIMIT_ENABLED', 'maybe'],
+    ['TRUST_PROXY', '-1'],
+    ['UPLOAD_DAILY_LIMIT', '0'],
+  ])('rejects an invalid %s', (name, value) => {
+    expect(() => validateEnv({ ...required, [name]: value })).toThrow(
+      new RegExp(name),
+    );
   });
 
   it('builds the default PUBLIC_API_URL from PORT and drops a final slash', () => {

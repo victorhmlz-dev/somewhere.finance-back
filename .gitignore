@@ -22,3 +22,6 @@
 
 # Uploaded images
 /uploads
+
+# Internal security history: describes weaknesses, never committed
+SECURITY-HISTORY.md

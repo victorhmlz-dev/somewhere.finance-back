@@ -3,7 +3,6 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
-  IsUrl,
   Matches,
   MaxLength,
   ValidateIf,
@@ -43,9 +42,12 @@ export class UpdateProfileDto {
   @MaxLength(160)
   bio?: string;
 
-  /** URL of the image, or null to remove it. */
+  /**
+   * Link to an image uploaded to this API (`POST /uploads/images`), or null
+   * to remove it.
+   */
   @IsOptional()
-  @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
+  @IsString()
   @MaxLength(2048)
   avatar?: string | null;
 }

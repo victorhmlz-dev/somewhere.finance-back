@@ -17,6 +17,7 @@ import {
 } from '../notifications/notification-events.js';
 import { isUniqueViolation } from '../prisma/prisma-errors.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { UploadsService } from '../uploads/uploads.service.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import {
   toUserProfile,
@@ -35,7 +36,10 @@ export type ViewedUserSummary = UserSummary & ViewerRelation;
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly uploads: UploadsService,
+  ) {}
 
   async getProfile(
     handle: string,
@@ -55,6 +59,7 @@ export class UsersService {
     userId: string,
     dto: UpdateProfileDto,
   ): Promise<UserProfile> {
+    if (dto.avatar) await this.uploads.assertOwnImage(dto.avatar, 'avatar');
     try {
       const user = await this.prisma.user.update({
         where: { id: userId },

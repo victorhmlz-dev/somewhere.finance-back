@@ -26,14 +26,14 @@ npm run start:dev        # API en http://localhost:3001/api
 | `npm run start:dev` | Arranca la API y recarga al guardar |
 | `npm run build` | Compila a `dist/` |
 | `npm test` | Tests unitarios (`src/**/*.spec.ts`) |
-| `npm run test:e2e` | Tests contra la API y la base de datos reales (`test/`), un archivo detrás de otro |
+| `npm run test:e2e` | Tests contra la API y una base de datos solo para tests (`test/`), un archivo detrás de otro |
 | `npm run lint` | oxlint |
 | `npm run db:up` / `db:down` | Levanta o para PostgreSQL |
 | `npm run db:migrate` | Crea y aplica una migración a partir de los cambios en `prisma/schema.prisma` |
 | `npm run db:generate` | Regenera el cliente de Prisma en `src/generated/` |
 | `npm run db:studio` | Abre un explorador de la base de datos |
 | `npm run abi:sync` | Copia los eventos de los contratos compilados a `src/launchpad/abi.ts` |
-| `npm run launchpad:reset -- <cadena>` | Borra lo indexado de una cadena para leerla de nuevo |
+| `npm run launchpad:reset -- <cadena>` | Borra la copia de una cadena para leerla de nuevo; conserva lo que añadió la gente. Solo para desarrollo |
 
 Después de `npm run db:migrate` hay que ejecutar `npm run db:generate` para que el código vea los modelos nuevos.
 
@@ -252,7 +252,13 @@ Sobre la respuesta:
 - `confirmations` es cuántos bloques espera el indexador antes de leer uno. Lo que el indexador lee no lo deshace, así que en una red real tiene que ser lo bastante alto para que el bloque ya no pueda cambiar. Solo una cadena local admite `0`.
 - `logBlockRange` es cuántos bloques pide el indexador al nodo de una vez (por defecto 2000). Los planes gratuitos de los proveedores lo limitan: en Alchemy gratis, a 10.
 - Si una cadena reemplaza un bloque ya leído, el indexador se detiene y lo dice en el log.
-- El indexador recuerda qué contrato `Launchpad` leyó. Si `EVM_CHAINS` pasa a nombrar otro para la misma cadena, se detiene y pide `npm run launchpad:reset -- <cadena>`, en vez de mezclar los datos de dos contratos.
+- El indexador recuerda qué contrato `Launchpad` leyó. Si `EVM_CHAINS` pasa a nombrar otro para la misma cadena, lee el nuevo desde su `startBlock` sin borrar nada: los lanzamientos del anterior se quedan en la base de datos, sin mostrarse, con todo lo que la gente añadió. Cambiar de contrato no requiere `launchpad:reset`.
+
+### Lo que la gente añade nunca se pierde al releer la cadena
+
+La tabla `launches` es una copia de la cadena: se puede borrar y volver a leer. Lo que la gente añade sobre un lanzamiento vive aparte y lo apunta por su id: la descripción y la imagen (`launch_profiles`), los comentarios (`posts.launch_id`), las reacciones y las notificaciones. Ninguna de esas tablas tiene clave foránea hacia `launches`, así que borrar la copia no las toca.
+
+El id de un lanzamiento sale de la propia cadena (`src/launchpad/launch-id.ts`): un UUIDv7 con la hora de su bloque, su número y un hash de cadena, contrato y número. Releer la cadena le da el mismo id, y todo lo añadido vuelve a encontrarlo. Las notificaciones de compra guardan la clave de su evento (`source_key`), así que releer la cadena no las repite. Hay un test que borra la copia, la vuelve a leer y comprueba que descripción, imagen, comentarios, reacciones y notificaciones siguen igual.
 - Los errores del indexador no muestran la URL del nodo, porque suele llevar la API key del proveedor.
 
 ### Desarrollo con una cadena local
@@ -260,7 +266,7 @@ Sobre la respuesta:
 1. En `somewhere.finance-contracts`: `npm run node` (déjalo abierto) y, en otra terminal, `npm run demo:local`. El segundo crea un Launchpad con tres lanzamientos de ejemplo e imprime la línea `EVM_CHAINS=…`.
 2. Pega esa línea en el `.env` de este proyecto y arranca la API.
 
-Cada vez que se reinicia la cadena local empieza de cero, y hay que borrar lo indexado de la anterior: `npm run launchpad:reset -- local`.
+Cada vez que se reinicia la cadena local empieza de cero, y hay que borrar lo indexado de la anterior: `npm run launchpad:reset -- local`. El script solo borra la copia de la cadena y se niega a funcionar con `NODE_ENV=production`.
 
 Si cambia un evento de los contratos, `npm run abi:sync` regenera `src/launchpad/abi.ts` a partir de los contratos compilados.
 
@@ -274,8 +280,21 @@ Si cambia un evento de los contratos, `npm run abi:sync` regenera `src/launchpad
 - Acepta PNG, JPEG, GIF y WebP de hasta 2 MB. El formato se lee del contenido del archivo, no del nombre ni del tipo que manda el navegador. SVG no se acepta porque puede llevar scripts.
 - Cada imagen se decodifica y se vuelve a escribir en su formato con `sharp` antes de guardarla. Solo queda la imagen: se pierden los metadatos ocultos (como la posición GPS de una foto) y cualquier cosa añadida al archivo. Las de más de 2048 px de lado se reducen.
 - El archivo se nombra con el SHA-256 de lo guardado. Un enlace siempre muestra la misma imagen, cualquiera puede comprobarlo, y la misma imagen subida dos veces se guarda una. Por eso se sirve con caché de un año.
-- La `url` devuelta es la que se guarda después en un perfil (`avatar`) o en un lanzamiento (`image`). Se construye con `PUBLIC_API_URL` (por defecto `http://localhost:<PORT>/api`).
+- La `url` devuelta es la que se guarda después en un perfil (`avatar`), un post (`image`) o un lanzamiento (`image`). Los tres solo aceptan imágenes subidas aquí (400 para cualquier otro enlace): una imagen de otro sitio puede cambiar después y le dice a su dueño quién la mira. Los avatares antiguos con enlaces de fuera se conservan hasta que el usuario cambie el suyo.
+- Cada subida queda registrada en `uploads`, con quién la hizo. Un usuario puede subir `UPLOAD_DAILY_LIMIT` imágenes en 24 horas (30 por defecto); pasado el límite responde 429. Se construye con `PUBLIC_API_URL` (por defecto `http://localhost:<PORT>/api`).
 - Los archivos van a la carpeta `UPLOAD_DIR` (por defecto `uploads/`, ignorada por git). En producción hará falta un almacenamiento de objetos (S3, R2…) o un disco persistente; las imágenes subidas que nadie llega a usar todavía no se borran.
+
+## Límites de peticiones
+
+Cada IP puede hacer 120 peticiones por minuto a cada ruta. Algunas tienen un límite menor (`src/common/rate-limits.ts`): pedir y verificar el reto de login, 10; subir imágenes, 20; publicar posts, 20; mandar los detalles de un lanzamiento, 10. Pasado el límite la API responde 429 con "Too many requests. Wait a minute and try again.".
+
+- Los contadores viven en la memoria de cada servidor. Con varios servidores harán falta en un almacén compartido, como Redis.
+- Detrás de un balanceador o una CDN, `TRUST_PROXY` es cuántos hay delante, para contar por la IP real del cliente (`X-Forwarded-For`). Con un número equivocado, un cliente podría falsear su IP.
+- `RATE_LIMIT_ENABLED=false` los apaga; solo lo usan los tests.
+
+## Tests y base de datos
+
+Los tests e2e nunca usan la base de datos del `.env`. Usan la de `TEST_DATABASE_URL` o, si no está, la del `.env` con `_test` añadido al nombre (`somewhere_finance_test`), que se crea y se migra sola antes de empezar (`test/support/`). Se niegan a correr contra una base de datos cuyo nombre no acabe en `_test` o que no esté en esta máquina. También guardan las imágenes en una carpeta temporal.
 
 ## Paginación
 

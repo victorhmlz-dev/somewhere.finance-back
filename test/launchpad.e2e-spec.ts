@@ -230,6 +230,21 @@ describe('Launchpad (e2e)', () => {
   });
 
   afterAll(async () => {
+    // What people added has no foreign key to the launch: deleted by id
+    const launchIds = (
+      await prisma.launch.findMany({
+        where: { chainKey },
+        select: { id: true },
+      })
+    ).map((launch) => launch.id);
+    await prisma.launchProfile.deleteMany({
+      where: { launchId: { in: launchIds } },
+    });
+    await prisma.reaction.deleteMany({
+      where: { launchId: { in: launchIds } },
+    });
+    await prisma.post.deleteMany({ where: { launchId: { in: launchIds } } });
+    await prisma.pendingLaunchDetails.deleteMany({ where: { chainKey } });
     await prisma.launch.deleteMany({ where: { chainKey } });
     await prisma.chainEvent.deleteMany({ where: { chainKey } });
     await prisma.chainCursor.deleteMany({ where: { chainKey } });
@@ -931,16 +946,6 @@ describe('Launchpad (e2e)', () => {
     });
   });
 
-  describe('a change of contract', () => {
-    it('stops the indexer instead of mixing two launchpads', async () => {
-      chain.mine();
-      await sync();
-      await expect(
-        indexer.sync({ ...chainConfig, launchpad: randomAddress() }, chain),
-      ).rejects.toThrow(/launchpad:reset/);
-    });
-  });
-
   describe('the token list', () => {
     it('lists every listed token in the standard format, and only those', async () => {
       const { wallet, session } = await newUser();
@@ -966,7 +971,9 @@ describe('Launchpad (e2e)', () => {
       const { id } = await findLaunch(withImage.params.symbol);
       const image = await uploadImage(session, '#00ff00');
       // Details can only be set before the start: this one is set directly
-      await prisma.launch.update({ where: { id }, data: { imageUrl: image } });
+      await prisma.launchProfile.create({
+        data: { launchId: id, imageUrl: image },
+      });
 
       const list = (await api().get('/launches/token-list').expect(200)).body;
       const validate = addFormats(new Ajv({ allErrors: true })).compile(
@@ -1002,6 +1009,109 @@ describe('Launchpad (e2e)', () => {
       // Adding an image is a change to a token: the patch number goes up
       expect(list.version.minor).toBe(before.version.minor);
       expect(list.version.patch).toBe(before.version.patch + 1);
+    });
+  });
+  describe('a change of contract', () => {
+    it('reads the new Launchpad on its own, deleting nothing', async () => {
+      const symbol = uniqueSymbol();
+      chain.mine([newLaunch({ symbol }).created]);
+      await sync();
+      const before = await prisma.launch.count({ where: { chainKey } });
+
+      // Another contract on the same chain, with a launch of its own
+      const otherLaunchpad = randomAddress();
+      chain.mine([
+        {
+          address: otherLaunchpad,
+          abi: launchpadEvents,
+          name: 'LaunchCreated',
+          args: newLaunch({ symbol: uniqueSymbol() }),
+        } as FakeEvent,
+      ]);
+      const other = { ...chainConfig, launchpad: otherLaunchpad.toLowerCase() };
+      await indexer.sync(other as EvmChainConfig, chain);
+
+      // Its launch is stored, the previous ones are all still there, and the
+      // API keeps showing the configured contract
+      expect(await prisma.launch.count({ where: { chainKey } })).toBe(
+        before + 1,
+      );
+      expect((await findLaunch(symbol)).symbol).toBe(symbol);
+
+      // Back to the configured one: read again from its start, repeating nothing
+      await sync();
+      expect(await prisma.launch.count({ where: { chainKey } })).toBe(
+        before + 1,
+      );
+    });
+  });
+
+  // Last: it deletes the copy of the test chain
+  describe('reading the chain again', () => {
+    it('keeps everything people added, attached to the same launches', async () => {
+      const creator = await newUser();
+      const fan = await newUser();
+      const now = Date.now();
+      const upcoming = newLaunch({
+        symbol: uniqueSymbol(),
+        creator: creator.wallet.address.toLowerCase() as Hex,
+        startTime: new Date(now + DAY),
+        endTime: new Date(now + 2 * DAY),
+      });
+      const live = newLaunch({
+        symbol: uniqueSymbol(),
+        creator: creator.wallet.address.toLowerCase() as Hex,
+      });
+      chain.mine([upcoming.created, live.created]);
+      chain.mine([
+        live.contributed(fan.wallet.address.toLowerCase() as Hex, '1', '1'),
+      ]);
+      await sync();
+
+      const { id } = await findLaunch(upcoming.params.symbol);
+      const image = await uploadImage(creator.session, '#123456');
+      await api(creator.session)
+        .put(`/launches/${id}/details`)
+        .send({ description: 'Stays forever.', image })
+        .expect(200);
+      const comment = await api(fan.session)
+        .post('/posts')
+        .send({ text: 'Count me in.', launchId: id })
+        .expect(201);
+      await api(fan.session).put(`/launches/${id}/reactions/gem`).expect(200);
+      const told = async (session: TestSession) =>
+        (await notificationsOf(session)).map(
+          (item: { type: string }) => item.type,
+        );
+      const creatorBefore = await told(creator.session);
+      const fanBefore = await told(fan.session);
+
+      // What `npm run launchpad:reset` deletes: the copy of the chain
+      await prisma.launch.deleteMany({ where: { chainKey } });
+      await prisma.chainEvent.deleteMany({ where: { chainKey } });
+      await prisma.chainCursor.deleteMany({ where: { chainKey } });
+      await sync();
+
+      const again = await findLaunch(upcoming.params.symbol, fan.session);
+      expect(again).toMatchObject({
+        id,
+        description: 'Stays forever.',
+        image,
+        detailsSetAt: expect.any(String),
+      });
+      expect(
+        again.reactions.find((reaction) => reaction.kind === 'gem'),
+      ).toEqual({ kind: 'gem', count: 1, reacted: true });
+      const comments = await api().get(`/launches/${id}/comments`).expect(200);
+      expect(
+        comments.body.items.map((post: { id: string }) => post.id),
+      ).toEqual([comment.body.id]);
+      expect(comments.body.items[0].launch.id).toBe(id);
+
+      // The purchase was read twice and told once
+      expect(await told(creator.session)).toEqual(creatorBefore);
+      expect(await told(fan.session)).toEqual(fanBefore);
+      expect(fanBefore).toContain('purchase');
     });
   });
 });

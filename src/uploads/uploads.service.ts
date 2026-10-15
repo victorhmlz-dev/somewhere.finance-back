@@ -3,16 +3,21 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import sharp, { type Sharp } from 'sharp';
 import type { Env } from '../config/env.js';
+import { PrismaService } from '../prisma/prisma.service.js';
 import { detectImage, type ImageExtension } from './image-file.js';
 
 /** Names the API gives to stored files: the SHA-256 of the file and its extension. */
 export const STORED_NAME_PATTERN = /^[0-9a-f]{64}\.(png|jpg|gif|webp)$/;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Longest side an image is kept at. Larger ones are scaled down. */
 const MAX_SIDE = 2048;
@@ -40,14 +45,33 @@ const ENCODERS: Record<ImageExtension, (image: Sharp) => Sharp> = {
 export class UploadsService {
   readonly directory: string;
   private readonly publicApiUrl: string;
+  private readonly dailyLimit: number;
 
-  constructor(config: ConfigService<Env, true>) {
+  constructor(
+    private readonly prisma: PrismaService,
+    config: ConfigService<Env, true>,
+  ) {
     this.directory = resolve(config.get('UPLOAD_DIR', { infer: true }));
     this.publicApiUrl = config.get('PUBLIC_API_URL', { infer: true });
+    this.dailyLimit = config.get('UPLOAD_DAILY_LIMIT', { infer: true });
   }
 
-  /** Stores an image and returns the link it is served from. */
-  async saveImage(bytes: Buffer): Promise<{ url: string }> {
+  /**
+   * Stores an image of a user and returns the link it is served from. Each
+   * upload is recorded, with who made it; a user can make UPLOAD_DAILY_LIMIT
+   * of them in 24 hours.
+   */
+  async saveImage(userId: string, bytes: Buffer): Promise<{ url: string }> {
+    const recent = await this.prisma.upload.count({
+      where: { userId, createdAt: { gt: new Date(Date.now() - DAY_MS) } },
+    });
+    if (recent >= this.dailyLimit) {
+      throw new HttpException(
+        `You can upload ${this.dailyLimit} images a day. Try again tomorrow.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const extension = detectImage(bytes);
     if (!extension) {
       throw new BadRequestException(
@@ -64,6 +88,9 @@ export class UploadsService {
       // Already stored: same content, same name
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
+    await this.prisma.upload.create({
+      data: { userId, fileName: name, bytes: clean.length },
+    });
     return { url: this.urlOf(name) };
   }
 
@@ -76,6 +103,19 @@ export class UploadsService {
     if (!url.startsWith(prefix)) return null;
     const name = url.slice(prefix.length);
     return (await this.exists(name)) ? name : null;
+  }
+
+  /**
+   * Refuses a link that is not to an image uploaded here: an image from
+   * elsewhere can change after it is set, and tells its owner who looks at
+   * it. `field` names the field in the error.
+   */
+  async assertOwnImage(url: string, field: string): Promise<void> {
+    if (!(await this.storedNameOf(url))) {
+      throw new BadRequestException(
+        `${field} must be an image uploaded to Somewhere`,
+      );
+    }
   }
 
   /** Checks that a stored file exists, before it is sent. */

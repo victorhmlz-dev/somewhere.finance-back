@@ -19,6 +19,7 @@ import {
 } from '../auth/auth.guard.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { PaginationQueryDto } from '../common/pagination.js';
+import { LimitPerMinute, RATE_LIMITS } from '../common/rate-limits.js';
 import type { ReactionKind } from '../generated/prisma/enums.js';
 import { PostsService } from '../posts/posts.service.js';
 import { ParseReactionKindPipe } from '../reactions/reaction-kind.pipe.js';
@@ -70,6 +71,7 @@ export class LaunchesController {
    * that creates it. 200 with the launch if it is indexed already; 202 with
    * null if they wait for the indexer.
    */
+  @LimitPerMinute(RATE_LIMITS.launchDetails)
   @Post('details')
   @UseGuards(AuthGuard)
   async sendDetails(

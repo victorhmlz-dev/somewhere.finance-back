@@ -8,6 +8,7 @@ import {
 } from './abi.js';
 import type { ChainLog } from './chain-reader.js';
 import { applyPendingDetails } from './launch-details.js';
+import { launchRowId } from './launch-id.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -22,6 +23,8 @@ const ABI_BY_SOURCE: Record<LogSource, Abi> = {
 
 export interface LogContext {
   chainKey: string;
+  /** The Launchpad contract being read, in lowercase. */
+  launchpad: string;
   source: LogSource;
   blockHash: string;
   blockTime: Date;
@@ -86,7 +89,7 @@ export async function applyLog(
     data: [
       {
         chainKey: context.chainKey,
-        blockNumber: Number(log.blockNumber),
+        blockNumber: log.blockNumber,
         blockHash: context.blockHash,
         blockTime: context.blockTime,
         txHash: log.transactionHash,
@@ -107,17 +110,23 @@ export async function applyLog(
     return;
   }
 
+  const where = { chainKey: context.chainKey, launchpad: context.launchpad };
   const launch = await tx.launch.findFirst({
     where:
       context.source === 'sale'
-        ? { chainKey: context.chainKey, saleAddress: address }
-        : { chainKey: context.chainKey, vestingAddress: address },
+        ? { ...where, saleAddress: address }
+        : { ...where, vestingAddress: address },
   });
   // The indexer only asks for logs of contracts it knows.
   if (!launch) return;
 
   const handler = HANDLERS[eventName];
-  if (handler) await handler(tx, launch, args, context.blockTime);
+  if (handler) {
+    await handler(tx, launch, args, {
+      blockTime: context.blockTime,
+      sourceKey: `${context.chainKey}:${log.transactionHash.toLowerCase()}:${log.logIndex}`,
+    });
+  }
 }
 
 interface LaunchCreated {
@@ -152,10 +161,20 @@ async function createLaunch(
   event: LaunchCreated,
 ): Promise<void> {
   const { params } = event;
+  const origin = {
+    chainKey: context.chainKey,
+    launchpad: context.launchpad,
+    launchId: Number(event.launchId),
+    createdAt: context.blockTime,
+  };
   const launch = await tx.launch.create({
     data: {
-      chainKey: context.chainKey,
-      launchId: Number(event.launchId),
+      // The same id every time the chain is read: what people added about
+      // the launch points to it
+      id: launchRowId(origin),
+      chainKey: origin.chainKey,
+      launchpad: origin.launchpad,
+      launchId: origin.launchId,
       tokenAddress: lower(event.token),
       saleAddress: lower(event.sale),
       vestingAddress: lower(event.vesting),
@@ -177,7 +196,7 @@ async function createLaunch(
       feeBps: event.feeBps,
       vestingTranches: params.vestingTranches,
       createdAt: context.blockTime,
-      createdBlock: Number(log.blockNumber),
+      createdBlock: log.blockNumber,
       createdTxHash: log.transactionHash.toLowerCase(),
     },
   });
@@ -194,15 +213,22 @@ async function userOfWallet(tx: Tx, address: string): Promise<string | null> {
   return wallet?.userId ?? null;
 }
 
+/** Where an event happened: its block time and a key unique to the event. */
+interface EventContext {
+  blockTime: Date;
+  /** "<chain>:<transaction>:<log index>". */
+  sourceKey: string;
+}
+
 type Handler = (
   tx: Tx,
   launch: Launch,
   args: Record<string, unknown>,
-  blockTime: Date,
+  event: EventContext,
 ) => Promise<void>;
 
 const HANDLERS: Record<string, Handler> = {
-  async Contributed(tx, launch, args, blockTime) {
+  async Contributed(tx, launch, args, { blockTime, sourceKey }) {
     const contributor = lower(args.contributor as string);
     const amount = (args.amount as bigint).toString();
     const totalRaised = (args.totalRaised as bigint).toString();
@@ -242,6 +268,8 @@ const HANDLERS: Record<string, Handler> = {
       nativeAmount: amount,
       tokenAmount: tokens.toString(),
       createdAt: blockTime,
+      // Reading the chain again does not repeat the notification
+      sourceKey,
     };
     const buyerId = await userOfWallet(tx, contributor);
     const creatorId = await userOfWallet(tx, launch.creatorAddress);
@@ -264,7 +292,7 @@ const HANDLERS: Record<string, Handler> = {
     }
   },
 
-  async Finalized(tx, launch, args, blockTime) {
+  async Finalized(tx, launch, args, { blockTime }) {
     await tx.launch.update({
       where: { id: launch.id },
       data: {
@@ -279,7 +307,7 @@ const HANDLERS: Record<string, Handler> = {
     });
   },
 
-  async Cancelled(tx, launch, args, blockTime) {
+  async Cancelled(tx, launch, args, { blockTime }) {
     await tx.launch.update({
       where: { id: launch.id },
       data: {
@@ -289,7 +317,7 @@ const HANDLERS: Record<string, Handler> = {
     });
   },
 
-  async Claimed(tx, launch, args, blockTime) {
+  async Claimed(tx, launch, args, { blockTime }) {
     await tx.launchContribution.updateMany({
       where: {
         launchRowId: launch.id,
@@ -302,7 +330,7 @@ const HANDLERS: Record<string, Handler> = {
     });
   },
 
-  async Refunded(tx, launch, args, blockTime) {
+  async Refunded(tx, launch, args, { blockTime }) {
     await tx.launchContribution.updateMany({
       where: {
         launchRowId: launch.id,
@@ -315,7 +343,7 @@ const HANDLERS: Record<string, Handler> = {
     });
   },
 
-  async FeeCollected(tx, launch, _args, blockTime) {
+  async FeeCollected(tx, launch, _args, { blockTime }) {
     await tx.launch.update({
       where: { id: launch.id },
       data: { feeCollectedAt: blockTime },

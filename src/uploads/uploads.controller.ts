@@ -11,7 +11,9 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
-import { AuthGuard } from '../auth/auth.guard.js';
+import { AuthGuard, type AuthenticatedUser } from '../auth/auth.guard.js';
+import { CurrentUser } from '../auth/current-user.decorator.js';
+import { LimitPerMinute, RATE_LIMITS } from '../common/rate-limits.js';
 import { UploadsService } from './uploads.service.js';
 
 export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -31,6 +33,7 @@ export class UploadsController {
    * Takes one image, sent as multipart form data in the field `file`, and
    * returns `{ url }`. The link is what profiles, posts and launches store.
    */
+  @LimitPerMinute(RATE_LIMITS.uploads)
   @Post('images')
   @UseGuards(AuthGuard)
   @UseInterceptors(
@@ -38,10 +41,13 @@ export class UploadsController {
       limits: { fileSize: MAX_IMAGE_BYTES, files: 1 },
     }),
   )
-  uploadImage(@UploadedFile() file?: ReceivedFile) {
+  uploadImage(
+    @CurrentUser() currentUser: AuthenticatedUser,
+    @UploadedFile() file?: ReceivedFile,
+  ) {
     if (!file)
       throw new BadRequestException('Send the image in the field "file"');
-    return this.uploads.saveImage(file.buffer);
+    return this.uploads.saveImage(currentUser.id, file.buffer);
   }
 
   @Get(':name')

@@ -1,11 +1,5 @@
 import { Transform } from 'class-transformer';
-import {
-  IsOptional,
-  IsString,
-  IsUrl,
-  IsUUID,
-  MaxLength,
-} from 'class-validator';
+import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export const MAX_POST_LENGTH = 280;
 
@@ -17,9 +11,9 @@ export class CreatePostDto {
   @MaxLength(MAX_POST_LENGTH)
   text?: string;
 
-  /** URL of the image. */
+  /** Link to an image uploaded to this API (`POST /uploads/images`). */
   @IsOptional()
-  @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
+  @IsString()
   @MaxLength(2048)
   image?: string;
 

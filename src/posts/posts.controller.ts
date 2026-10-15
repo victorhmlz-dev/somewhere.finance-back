@@ -18,6 +18,7 @@ import {
 } from '../auth/auth.guard.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { PaginationQueryDto } from '../common/pagination.js';
+import { LimitPerMinute, RATE_LIMITS } from '../common/rate-limits.js';
 import type { ReactionKind } from '../generated/prisma/enums.js';
 import { ParseReactionKindPipe } from '../reactions/reaction-kind.pipe.js';
 import { CreatePostDto } from './dto/create-post.dto.js';
@@ -28,6 +29,7 @@ export class PostsController {
   constructor(private readonly posts: PostsService) {}
 
   /** Publishes a post, or a reply when `replyToId` is sent. */
+  @LimitPerMinute(RATE_LIMITS.posts)
   @Post()
   @UseGuards(AuthGuard)
   create(

@@ -14,6 +14,16 @@ export interface Env {
   INDEXER_POLL_MS: number;
   /** Folder uploaded images are kept in. */
   UPLOAD_DIR: string;
+  /** Images a user can upload in 24 hours. */
+  UPLOAD_DAILY_LIMIT: number;
+  /** Whether requests per IP are limited. Off only in tests. */
+  RATE_LIMIT_ENABLED: boolean;
+  /**
+   * How many proxies (load balancer, CDN) sit in front of the API. With 0
+   * the address that connects is the client's; behind a proxy, the client's
+   * address is read from X-Forwarded-For, skipping that many hops.
+   */
+  TRUST_PROXY: number;
 }
 
 const ONE_WEEK_IN_SECONDS = 60 * 60 * 24 * 7;
@@ -50,6 +60,21 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     throw new Error('UPLOAD_DIR must be a folder');
   }
 
+  const uploadDailyLimit = Number(raw.UPLOAD_DAILY_LIMIT ?? 30);
+  if (!Number.isInteger(uploadDailyLimit) || uploadDailyLimit < 1) {
+    throw new Error('UPLOAD_DAILY_LIMIT must be an integer of at least 1');
+  }
+
+  const rateLimit = String(raw.RATE_LIMIT_ENABLED ?? 'true');
+  if (rateLimit !== 'true' && rateLimit !== 'false') {
+    throw new Error('RATE_LIMIT_ENABLED must be true or false');
+  }
+
+  const trustProxy = Number(raw.TRUST_PROXY ?? 0);
+  if (!Number.isInteger(trustProxy) || trustProxy < 0) {
+    throw new Error('TRUST_PROXY must be the number of proxies, 0 or more');
+  }
+
   const jwtSecret = raw.JWT_SECRET;
   if (typeof jwtSecret !== 'string' || jwtSecret.length < 32) {
     throw new Error('JWT_SECRET must be at least 32 characters long');
@@ -77,5 +102,8 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     EVM_CHAINS: parseEvmChains(raw.EVM_CHAINS),
     INDEXER_POLL_MS: indexerPollMs,
     UPLOAD_DIR: uploadDir,
+    UPLOAD_DAILY_LIMIT: uploadDailyLimit,
+    RATE_LIMIT_ENABLED: rateLimit === 'true',
+    TRUST_PROXY: trustProxy,
   };
 }

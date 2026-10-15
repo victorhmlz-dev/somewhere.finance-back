@@ -7,6 +7,7 @@ import { AppModule } from '../src/app.module.js';
 import type { PostView } from '../src/posts/post-view.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { signIn, type TestSession } from './session.js';
+import { uploadTestImage } from './support/images.js';
 import { createEvmWallet } from './wallets.js';
 
 // Needs the database from `npm run db:up`.
@@ -71,10 +72,11 @@ describe('Posts (e2e)', () => {
   describe('publishing', () => {
     it('publishes a post and shows it to anyone', async () => {
       const aria = await newUser();
+      const image = await uploadTestImage(app, aria, '#aa3300');
 
       const post = await publish(aria, {
         text: '  Neon Bazaar just crossed 75% minted. #NeonBazaar  ',
-        image: 'https://example.com/bazaar.png',
+        image,
       });
       expect(post).toEqual({
         id: expect.any(String),
@@ -87,7 +89,7 @@ describe('Posts (e2e)', () => {
           bio: '',
         },
         text: 'Neon Bazaar just crossed 75% minted. #NeonBazaar',
-        image: 'https://example.com/bazaar.png',
+        image,
         createdAt: expect.any(String),
         replyTo: null,
         launch: null,
@@ -106,11 +108,19 @@ describe('Posts (e2e)', () => {
       });
     });
 
+    it('only takes images uploaded to Somewhere', async () => {
+      const aria = await newUser();
+      await api(aria)
+        .post('/posts')
+        .send({ text: 'Look', image: 'https://example.com/tracker.png' })
+        .expect(400);
+    });
+
     it('accepts a post that is only an image, or exactly 280 characters', async () => {
       const aria = await newUser();
 
       const imageOnly = await publish(aria, {
-        image: 'https://example.com/piece.png',
+        image: await uploadTestImage(app, aria, '#00aa33'),
       });
       expect(imageOnly.text).toBe('');
 
@@ -252,7 +262,7 @@ describe('Posts (e2e)', () => {
       const marcus = await newUser();
       const post = await publish(aria, {
         text: 'Regret this one.',
-        image: 'https://example.com/regret.png',
+        image: await uploadTestImage(app, aria, '#3300aa'),
       });
       const reply = await publish(marcus, {
         text: 'Too late.',

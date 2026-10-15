@@ -21,6 +21,11 @@ export interface NotificationEvent {
   tokenAmount?: string;
   /** When it happened, if not now: a purchase happened in its block. */
   createdAt?: Date;
+  /**
+   * For what an event on chain caused, the key of the event: the
+   * notification is created once, however many times the chain is read.
+   */
+  sourceKey?: string;
 }
 
 // The two functions below run inside the transaction of what causes the

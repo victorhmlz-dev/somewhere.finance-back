@@ -32,14 +32,16 @@ model User {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  wallets              Wallet[]
+  wallets   Wallet[]
   // Rows where this user is the one following.
-  following            Follow[]               @relation("following")
+  following Follow[]   @relation("following")
   // Rows where this user is the one being followed.
-  followers            Follow[]               @relation("followers")
-  posts                Post[]
-  likes                Like[]
-  reactions            Reaction[]
+  followers Follow[]   @relation("followers")
+  posts     Post[]
+  likes     Like[]
+  reactions Reaction[]
+  uploads   Upload[]
+
   pendingLaunchDetails PendingLaunchDetails[]
   reposts              Repost[]
   notifications        Notification[]         @relation("received")
@@ -57,7 +59,7 @@ model Post {
   imageUrl String? @map("image_url")
   parentId String? @map("parent_id") @db.Uuid
   // Set when the post is a comment on a launch, or a reply in one of its
-  // conversations.
+  // conversations. No foreign key: launches can be read from the chain again.
   launchId String? @map("launch_id") @db.Uuid
 
   // Kept in step with replies, reposts and likes, in the same transaction as
@@ -79,7 +81,6 @@ model Post {
   hashtags      PostHashtag[]
   notifications Notification[]
   reactions     Reaction[]
-  launch        Launch?        @relation(fields: [launchId], references: [id], onDelete: SetNull)
 
   @@index([authorId, id])
   @@index([parentId, id])
@@ -205,8 +206,11 @@ model Notification {
   // The post liked, reposted or reacted to, or the post that mentions,
   // replies or comments. Null for a follow and for a purchase.
   postId       String?          @map("post_id") @db.Uuid
-  // The launch bought, commented on or reacted to.
+  // The launch bought, commented on or reacted to. No foreign key: launches
+  // can be read from the chain again.
   launchId     String?          @map("launch_id") @db.Uuid
+  // For what an event on chain caused: "<chain>:<transaction>:<log index>".
+  sourceKey    String?          @map("source_key") @db.VarChar(120)
   reaction     ReactionKind?
   // For a purchase: what was paid, in wei, and the tokens it bought.
   nativeAmount Decimal?         @map("native_amount") @db.Decimal(78, 0)
@@ -214,12 +218,14 @@ model Notification {
   createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   readAt       DateTime?        @map("read_at") @db.Timestamptz(3)
 
-  recipient User    @relation("received", fields: [recipientId], references: [id], onDelete: Cascade)
-  actor     User?   @relation("caused", fields: [actorId], references: [id], onDelete: Cascade)
-  post      Post?   @relation(fields: [postId], references: [id], onDelete: Cascade)
-  launch    Launch? @relation(fields: [launchId], references: [id], onDelete: Cascade)
+  recipient User  @relation("received", fields: [recipientId], references: [id], onDelete: Cascade)
+  actor     User? @relation("caused", fields: [actorId], references: [id], onDelete: Cascade)
+  post      Post? @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@unique([recipientId, actorId, type, postId, launchId, reaction])
+  // A notification caused by an event on chain is created once, however many
+  // times the chain is read
+  @@unique([recipientId, type, sourceKey])
   @@index([recipientId, id])
   @@index([postId])
   @@index([launchId])
@@ -233,14 +239,14 @@ model Reaction {
   id        String       @id @default(uuid(7)) @db.Uuid
   userId    String       @map("user_id") @db.Uuid
   kind      ReactionKind
-  // Exactly one of the two is set.
+  // Exactly one of the two is set. The launch has no foreign key: launches
+  // can be read from the chain again.
   postId    String?      @map("post_id") @db.Uuid
   launchId  String?      @map("launch_id") @db.Uuid
   createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  post   Post?   @relation(fields: [postId], references: [id], onDelete: Cascade)
-  launch Launch? @relation(fields: [launchId], references: [id], onDelete: Cascade)
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post Post? @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@unique([userId, postId, kind])
   @@unique([userId, launchId, kind])
@@ -255,6 +261,21 @@ model Reaction {
  * the ones sent by the user who holds the creator's wallet are applied, and
  * all of them are deleted.
  */
+/**
+ * What the creator wrote about a launch: not on chain, set once, before the
+ * sale starts, and never changed. Kept apart from the launch, by its id, so
+ * it survives the launch being read from the chain again.
+ */
+model LaunchProfile {
+  launchId     String   @id @map("launch_id") @db.Uuid
+  description  String   @default("") @db.VarChar(280)
+  // A file uploaded to this API.
+  imageUrl     String?  @map("image_url")
+  detailsSetAt DateTime @default(now()) @map("details_set_at") @db.Timestamptz(3)
+
+  @@map("launch_profiles")
+}
+
 model PendingLaunchDetails {
   id          String   @id @default(uuid(7)) @db.Uuid
   chainKey    String   @map("chain_key") @db.VarChar(32)
@@ -296,12 +317,23 @@ model AuthChallenge {
 // ---------------------------------------------------------------------------
 
 // One row per launch created through a Launchpad contract.
+/**
+ * A launch as read from the chain. Everything here is a copy of the chain,
+ * and can be deleted and read again: what people add about a launch (its
+ * description and image, comments, reactions, notifications) lives in other
+ * tables that point to its id, and the id comes out the same every time the
+ * launch is read (see launch-id.ts), so they find it again.
+ */
 model Launch {
-  id       String @id @default(uuid(7)) @db.Uuid
+  // Derived from the chain: chain, contract, number and block time. Not
+  // random, so reading the chain again gives every launch the same id.
+  id        String @id @db.Uuid
   // Which configured chain it lives on, e.g. "ethereum" (see EVM_CHAINS).
-  chainKey String @map("chain_key") @db.VarChar(32)
+  chainKey  String @map("chain_key") @db.VarChar(32)
+  // The Launchpad contract that created it, in lowercase.
+  launchpad String @db.VarChar(42)
   // Number of the launch inside its Launchpad contract.
-  launchId Int    @map("launch_id")
+  launchId  Int    @map("launch_id")
 
   // Addresses are stored in lowercase.
   tokenAddress   String @map("token_address") @db.VarChar(42)
@@ -349,24 +381,14 @@ model Launch {
   vestingReleasedNative Decimal @default(0) @map("vesting_released_native") @db.Decimal(78, 0)
   vestingReleasedTokens Decimal @default(0) @map("vesting_released_tokens") @db.Decimal(78, 0)
 
-  // Written by the creator through the API; not on chain. Both are set
-  // together, once, before the sale starts, and never change; the image must
-  // be a file uploaded to this API.
-  description  String    @default("") @db.VarChar(280)
-  imageUrl     String?   @map("image_url")
-  detailsSetAt DateTime? @map("details_set_at") @db.Timestamptz(3)
-
   // Where and when the launch was created on chain.
   createdAt     DateTime @map("created_at") @db.Timestamptz(0)
-  createdBlock  Int      @map("created_block")
+  createdBlock  BigInt   @map("created_block")
   createdTxHash String   @map("created_tx_hash") @db.VarChar(66)
 
   contributions LaunchContribution[]
-  comments      Post[]
-  reactions     Reaction[]
-  notifications Notification[]
 
-  @@unique([chainKey, launchId])
+  @@unique([chainKey, launchpad, launchId])
   @@index([chainKey, saleAddress])
   @@index([chainKey, vestingAddress])
   @@index([creatorAddress])
@@ -400,7 +422,7 @@ model LaunchContribution {
 model ChainEvent {
   id          String   @id @default(uuid(7)) @db.Uuid
   chainKey    String   @map("chain_key") @db.VarChar(32)
-  blockNumber Int      @map("block_number")
+  blockNumber BigInt   @map("block_number")
   blockHash   String   @map("block_hash") @db.VarChar(66)
   blockTime   DateTime @map("block_time") @db.Timestamptz(0)
   txHash      String   @map("tx_hash") @db.VarChar(66)
@@ -423,9 +445,28 @@ model ChainCursor {
   // names another one, the indexer stops instead of mixing two contracts.
   launchpad String?  @db.VarChar(42)
   // Last block fully processed.
-  lastBlock Int      @map("last_block")
+  lastBlock BigInt   @map("last_block")
   lastHash  String   @map("last_hash") @db.VarChar(66)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@map("chain_cursors")
+}
+
+/**
+ * An image a user uploaded. Counts toward their daily quota, and says who
+ * uploaded each file, for moderation and for removing files nobody uses.
+ */
+model Upload {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  // Name of the stored file: the SHA-256 of its content and its extension.
+  fileName  String   @map("file_name") @db.VarChar(80)
+  bytes     Int
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([fileName])
+  @@map("uploads")
 }

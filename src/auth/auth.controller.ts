@@ -7,6 +7,7 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import { LimitPerMinute, RATE_LIMITS } from '../common/rate-limits.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { toUserProfile } from '../users/user-profile.js';
 import { AuthGuard, type AuthenticatedUser } from './auth.guard.js';
@@ -23,12 +24,14 @@ export class AuthController {
   ) {}
 
   /** Step 1 of the login: returns the message the wallet has to sign. */
+  @LimitPerMinute(RATE_LIMITS.signIn)
   @Post('challenge')
   createChallenge(@Body() dto: RequestChallengeDto) {
     return this.auth.createChallenge(dto);
   }
 
   /** Step 2 of the login: exchanges the signed message for an access token. */
+  @LimitPerMinute(RATE_LIMITS.signIn)
   @Post('verify')
   @HttpCode(200)
   verifySignature(@Body() dto: VerifySignatureDto) {

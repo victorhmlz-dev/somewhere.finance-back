@@ -2,21 +2,15 @@ import type { Post, Prisma, User } from '../generated/prisma/client.js';
 import type { ReactionCount } from '../reactions/reactions.service.js';
 import { toUserSummary, type UserSummary } from '../users/user-profile.js';
 
-const LAUNCH_SUMMARY = {
-  select: { id: true, name: true, symbol: true, imageUrl: true },
-} satisfies Prisma.LaunchDefaultArgs;
-
 /** What has to be loaded with a post to build its `PostView`. */
 export const POST_INCLUDE = {
   author: true,
   parent: { include: { author: true } },
-  launch: LAUNCH_SUMMARY,
 } satisfies Prisma.PostInclude;
 
 export type PostRow = Post & {
   author: User;
   parent: (Post & { author: User }) | null;
-  launch: Prisma.LaunchGetPayload<typeof LAUNCH_SUMMARY> | null;
 };
 
 /** The launch a post comments on, enough to show and link it. */
@@ -46,10 +40,16 @@ export interface PostView {
   reactions: ReactionCount[];
 }
 
+/**
+ * `launch` is the launch the post comments on, loaded apart: posts keep the
+ * launch id without a foreign key, because launches can be read from the
+ * chain again. Null when there is none, or while it is not indexed.
+ */
 export function toPostView(
   post: PostRow,
   viewer: { isLiked: boolean; isReposted: boolean },
   reactions: ReactionCount[],
+  launch: PostLaunchView | null,
 ): PostView {
   return {
     id: post.id,
@@ -60,14 +60,7 @@ export function toPostView(
     replyTo: post.parent
       ? { id: post.parent.id, handle: post.parent.author.handle }
       : null,
-    launch: post.launch
-      ? {
-          id: post.launch.id,
-          name: post.launch.name,
-          symbol: post.launch.symbol,
-          image: post.launch.imageUrl,
-        }
-      : null,
+    launch,
     stats: {
       replies: post.repliesCount,
       reposts: post.repostsCount,

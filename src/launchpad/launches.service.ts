@@ -14,6 +14,7 @@ import type { EvmChainConfig } from '../config/evm-chains.js';
 import type {
   Launch,
   LaunchContribution,
+  LaunchProfile,
   Prisma,
 } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -93,6 +94,23 @@ export class LaunchesService {
     this.chains = new Map(chains.map((chain) => [chain.key, chain]));
   }
 
+  /**
+   * The launches shown: those of the Launchpad configured for each chain.
+   * A chain taken out of the configuration, or a contract replaced by a new
+   * one, stops being shown; nothing of it is deleted.
+   */
+  private configured(chainKey?: string): Prisma.LaunchWhereInput {
+    const chains = [...this.chains.values()].filter(
+      (chain) => chainKey === undefined || chain.key === chainKey,
+    );
+    return {
+      OR: chains.map((chain) => ({
+        chainKey: chain.key,
+        launchpad: chain.launchpad,
+      })),
+    };
+  }
+
   /** The chains launches can be created on. */
   listChains(): { items: ChainView[] } {
     return { items: [...this.chains.values()].map(toChainView) };
@@ -106,20 +124,19 @@ export class LaunchesService {
     const now = new Date();
     const rows = await this.prisma.launch.findMany({
       where: {
-        // A chain taken out of the configuration stops being shown.
-        chainKey: query.chain ?? { in: [...this.chains.keys()] },
-        creatorAddress: query.creator,
-        ...(query.status ? statusCondition(query.status, now) : {}),
-        ...(query.q
-          ? {
-              AND: {
+        AND: [
+          this.configured(query.chain),
+          { creatorAddress: query.creator },
+          query.status ? statusCondition(query.status, now) : {},
+          query.q
+            ? {
                 OR: [
                   { name: { contains: query.q, mode: 'insensitive' } },
                   { symbol: { contains: query.q, mode: 'insensitive' } },
                 ],
-              },
-            }
-          : {}),
+              }
+            : {},
+        ],
       },
       ...pageArgs(query),
     });
@@ -136,22 +153,21 @@ export class LaunchesService {
   /** The tokens of every listed launch, in the token list format. */
   async tokenList(): Promise<TokenList> {
     const launches = await this.prisma.launch.findMany({
-      where: {
-        chainKey: { in: [...this.chains.keys()] },
-        finalizedAt: { not: null },
-      },
+      where: { AND: [this.configured(), { finalizedAt: { not: null } }] },
       orderBy: [{ finalizedAt: 'asc' }, { id: 'asc' }],
       select: {
+        id: true,
         chainKey: true,
         tokenAddress: true,
         name: true,
         symbol: true,
-        imageUrl: true,
       },
     });
+    const profiles = await this.profilesOf(launches.map((launch) => launch.id));
     return toTokenList(
       launches.map((launch) => ({
         ...launch,
+        imageUrl: profiles.get(launch.id)?.imageUrl ?? null,
         chainId: this.chains.get(launch.chainKey)!.chainId,
       })),
       new Date(),
@@ -198,7 +214,9 @@ export class LaunchesService {
     const details = await this.checkDetails(dto);
     const indexed = () =>
       this.prisma.launch.findFirst({
-        where: { chainKey: dto.chain, createdTxHash: dto.txHash },
+        where: {
+          AND: [this.configured(dto.chain), { createdTxHash: dto.txHash }],
+        },
       });
 
     const launch = await indexed();
@@ -249,20 +267,26 @@ export class LaunchesService {
 
   /** The description, and the image only if it was uploaded here. */
   private async checkDetails(dto: LaunchDetailsDto): Promise<LaunchDetails> {
-    if (dto.image && !(await this.uploads.storedNameOf(dto.image))) {
-      throw new BadRequestException(
-        'image must be an image uploaded to Somewhere',
-      );
-    }
+    if (dto.image) await this.uploads.assertOwnImage(dto.image, 'image');
     return { description: dto.description, imageUrl: dto.image ?? null };
   }
 
   private async findConfigured(id: string): Promise<Launch> {
     const launch = await this.prisma.launch.findUnique({ where: { id } });
-    if (!launch || !this.chains.has(launch.chainKey)) {
+    const chain = launch ? this.chains.get(launch.chainKey) : undefined;
+    if (!launch || chain?.launchpad !== launch.launchpad) {
       throw new NotFoundException('Launch not found');
     }
     return launch;
+  }
+
+  /** The descriptions and images of those launches, by launch id. */
+  private async profilesOf(ids: string[]): Promise<Map<string, LaunchProfile>> {
+    if (ids.length === 0) return new Map();
+    const profiles = await this.prisma.launchProfile.findMany({
+      where: { launchId: { in: ids } },
+    });
+    return new Map(profiles.map((profile) => [profile.launchId, profile]));
   }
 
   private async toViews(
@@ -302,11 +326,11 @@ export class LaunchesService {
       }
     }
 
-    const reactions = await this.reactions.countsFor(
-      'launchId',
-      launches.map((launch) => launch.id),
-      viewerId,
-    );
+    const ids = launches.map((launch) => launch.id);
+    const [reactions, profiles] = await Promise.all([
+      this.reactions.countsFor('launchId', ids, viewerId),
+      this.profilesOf(ids),
+    ]);
 
     return launches.map((launch) =>
       toLaunchView(
@@ -314,6 +338,7 @@ export class LaunchesService {
         this.chains.get(launch.chainKey)!,
         userByAddress.get(launch.creatorAddress) ?? null,
         mine.get(launch.id) ?? [],
+        profiles.get(launch.id) ?? null,
         reactions.get(launch.id)!,
         now,
       ),

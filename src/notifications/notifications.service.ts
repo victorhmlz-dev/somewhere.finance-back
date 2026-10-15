@@ -158,7 +158,7 @@ export class NotificationsService {
     `;
 
     const pageGroups = groups.slice(0, query.limit);
-    const [actors, launches, postById] = await Promise.all([
+    const [actors, launches, profiles, postById] = await Promise.all([
       this.prisma.user.findMany({
         where: { id: { in: pageGroups.flatMap((group) => group.actor_ids) } },
       }),
@@ -166,13 +166,15 @@ export class NotificationsService {
         where: {
           id: { in: pageGroups.flatMap((group) => group.launch_id ?? []) },
         },
-        select: {
-          id: true,
-          chainKey: true,
-          name: true,
-          symbol: true,
-          imageUrl: true,
+        select: { id: true, chainKey: true, name: true, symbol: true },
+      }),
+      this.prisma.launchProfile.findMany({
+        where: {
+          launchId: {
+            in: pageGroups.flatMap((group) => group.launch_id ?? []),
+          },
         },
+        select: { launchId: true, imageUrl: true },
       }),
       // Looking at your notifications is not a view of the posts in them.
       this.posts.viewsById(
@@ -183,6 +185,7 @@ export class NotificationsService {
     ]);
     const actorById = new Map(actors.map((actor) => [actor.id, actor]));
     const launchById = new Map(launches.map((launch) => [launch.id, launch]));
+    const imageOf = new Map(profiles.map((p) => [p.launchId, p.imageUrl]));
 
     const items: NotificationView[] = [];
     for (const group of pageGroups) {
@@ -209,7 +212,7 @@ export class NotificationsService {
               id: launch.id,
               name: launch.name,
               symbol: launch.symbol,
-              image: launch.imageUrl,
+              image: imageOf.get(launch.id) ?? null,
               nativeSymbol: this.nativeSymbols.get(launch.chainKey) ?? 'ETH',
             }
           : null,

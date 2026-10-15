@@ -6,6 +6,7 @@ import type { App } from 'supertest/types.js';
 import { AppModule } from '../src/app.module.js';
 import { PrismaService } from '../src/prisma/prisma.service.js';
 import { signIn, type TestSession } from './session.js';
+import { uploadTestImage } from './support/images.js';
 import { createEvmWallet, createSolanaWallet } from './wallets.js';
 
 // Needs the database from `npm run db:up`.
@@ -88,6 +89,13 @@ describe('Users (e2e)', () => {
     it('edits only the fields that are sent', async () => {
       const session = await newUser();
       const handle = uniqueHandle();
+      const avatar = await uploadTestImage(app, session);
+
+      // Only an image uploaded here: one from elsewhere can change later
+      await api(session)
+        .patch('/users/me')
+        .send({ avatar: 'https://example.com/aria.png' })
+        .expect(400);
 
       const edited = await api(session)
         .patch('/users/me')
@@ -95,7 +103,7 @@ describe('Users (e2e)', () => {
           name: '  Aria Chen  ',
           handle: handle.toUpperCase(),
           bio: 'Collector across four chains.',
-          avatar: 'https://example.com/aria.png',
+          avatar,
         })
         .expect(200);
       expect(edited.body).toMatchObject({
@@ -103,7 +111,7 @@ describe('Users (e2e)', () => {
         name: 'Aria Chen',
         handle,
         bio: 'Collector across four chains.',
-        avatar: 'https://example.com/aria.png',
+        avatar,
       });
 
       const cleared = await api(session)

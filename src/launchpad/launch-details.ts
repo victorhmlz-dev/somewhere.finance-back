@@ -34,17 +34,24 @@ export async function applyLaunchDetails(
   if (!(await evmWalletsOf(tx, userId)).includes(launch.creatorAddress)) {
     return 'not-creator';
   }
-  if (launch.detailsSetAt) return 'already-set';
+  if (await tx.launchProfile.findUnique({ where: { launchId: launch.id } })) {
+    return 'already-set';
+  }
   if (launch.cancelledAt || now >= launch.startTime) return 'started';
 
-  // Conditional, so two requests at once cannot both set them
-  const { count } = await tx.launch.updateMany({
-    where: { id: launch.id, detailsSetAt: null },
-    data: {
-      description: details.description,
-      imageUrl: details.imageUrl,
-      detailsSetAt: now,
-    },
+  // Kept apart from the launch, which is a copy of the chain, so they survive
+  // it being read again. Skipping duplicates: if two requests arrive at once,
+  // only the first one sets them.
+  const { count } = await tx.launchProfile.createMany({
+    data: [
+      {
+        launchId: launch.id,
+        description: details.description,
+        imageUrl: details.imageUrl,
+        detailsSetAt: now,
+      },
+    ],
+    skipDuplicates: true,
   });
   return count === 0 ? 'already-set' : null;
 }

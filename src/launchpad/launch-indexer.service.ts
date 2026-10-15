@@ -94,17 +94,19 @@ export class LaunchIndexerService
     const cursor = await this.prisma.chainCursor.findUnique({
       where: { chainKey: chain.key },
     });
-    if (cursor?.launchpad && cursor.launchpad !== chain.launchpad) {
-      throw new Error(
-        `${chain.key}: the configured Launchpad (${chain.launchpad}) is not ` +
-          `the one indexed so far (${cursor.launchpad}). To index the new ` +
-          `one, stop the API and run "npm run launchpad:reset -- ${chain.key}".`,
+    // A new Launchpad on the same chain is read from its own start block.
+    // Nothing is deleted: the launches of the previous one stay in the
+    // database, out of sight, with everything people added to them.
+    const sameContract =
+      !cursor?.launchpad || cursor.launchpad === chain.launchpad;
+    if (cursor && !sameContract) {
+      this.logger.log(
+        `${chain.key}: the Launchpad is now ${chain.launchpad}; reading it ` +
+          `from block ${chain.startBlock}`,
       );
     }
-    if (cursor) {
-      const block = await reader
-        .getBlock(BigInt(cursor.lastBlock))
-        .catch(() => null);
+    if (cursor && sameContract) {
+      const block = await reader.getBlock(cursor.lastBlock).catch(() => null);
       if (!block) {
         // Typical of a local chain that was restarted.
         throw new Error(
@@ -122,7 +124,9 @@ export class LaunchIndexerService
 
     const target =
       (await reader.getBlockNumber()) - BigInt(chain.confirmations);
-    let from = BigInt(cursor ? cursor.lastBlock + 1 : chain.startBlock);
+    let from = BigInt(
+      cursor && sameContract ? cursor.lastBlock + 1n : chain.startBlock,
+    );
     const first = from;
 
     while (from <= target && !this.stopped) {
@@ -155,6 +159,7 @@ export class LaunchIndexerService
     const launches = await this.prisma.launch.findMany({
       where: {
         chainKey: chain.key,
+        launchpad: chain.launchpad,
         createdTxHash: { in: pending.map((row) => row.txHash) },
       },
     });
@@ -184,7 +189,7 @@ export class LaunchIndexerService
       [chain.launchpad, 'launchpad'],
     ]);
     const known = await this.prisma.launch.findMany({
-      where: { chainKey: chain.key },
+      where: { chainKey: chain.key, launchpad: chain.launchpad },
       select: { saleAddress: true, vestingAddress: true },
     });
     for (const launch of known) {
@@ -230,6 +235,7 @@ export class LaunchIndexerService
             tx,
             {
               chainKey: chain.key,
+              launchpad: chain.launchpad,
               source,
               blockHash: block.hash,
               blockTime: block.time,
@@ -240,7 +246,7 @@ export class LaunchIndexerService
 
         const position = {
           launchpad: chain.launchpad,
-          lastBlock: Number(toBlock),
+          lastBlock: toBlock,
           lastHash: blocks.get(toBlock)!.hash,
         };
         await tx.chainCursor.upsert({

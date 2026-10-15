@@ -18,11 +18,13 @@ import {
 } from '../notifications/notification-events.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ReactionsService } from '../reactions/reactions.service.js';
+import { UploadsService } from '../uploads/uploads.service.js';
 import { CreatePostDto } from './dto/create-post.dto.js';
 import { extractHashtags } from './hashtags.js';
 import { extractMentions } from './mentions.js';
 import {
   POST_INCLUDE,
+  type PostLaunchView,
   type PostRow,
   type PostView,
   toPostView,
@@ -37,6 +39,7 @@ export class PostsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly reactions: ReactionsService,
+    private readonly uploads: UploadsService,
   ) {}
 
   async create(authorId: string, dto: CreatePostDto): Promise<PostView> {
@@ -44,6 +47,7 @@ export class PostsService {
     if (!text && !dto.image) {
       throw new BadRequestException('A post needs text or an image');
     }
+    if (dto.image) await this.uploads.assertOwnImage(dto.image, 'image');
     if (dto.replyToId && dto.launchId) {
       throw new BadRequestException(
         'A reply belongs to the launch of the post it replies to',
@@ -245,6 +249,31 @@ export class PostsService {
     return new Map(views.map((view) => [view.id, view]));
   }
 
+  /** The launches those posts comment on, with their image, by id. */
+  private async launchesOf(
+    rows: PostRow[],
+  ): Promise<Map<string, PostLaunchView>> {
+    const ids = [...new Set(rows.flatMap((row) => row.launchId ?? []))];
+    if (ids.length === 0) return new Map();
+    const [launches, profiles] = await Promise.all([
+      this.prisma.launch.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true, symbol: true },
+      }),
+      this.prisma.launchProfile.findMany({
+        where: { launchId: { in: ids } },
+        select: { launchId: true, imageUrl: true },
+      }),
+    ]);
+    const images = new Map(profiles.map((p) => [p.launchId, p.imageUrl]));
+    return new Map(
+      launches.map((launch) => [
+        launch.id,
+        { ...launch, image: images.get(launch.id) ?? null },
+      ]),
+    );
+  }
+
   /** The user who holds an EVM wallet, if any does. */
   private async userOfWallet(address: string): Promise<string | null> {
     const wallet = await this.prisma.wallet.findFirst({
@@ -333,11 +362,14 @@ export class PostsService {
   ): Promise<PostView[]> {
     const liked = new Set<string>();
     const reposted = new Set<string>();
-    const reactions = await this.reactions.countsFor(
-      'postId',
-      rows.map((row) => row.id),
-      viewerId,
-    );
+    const [reactions, launches] = await Promise.all([
+      this.reactions.countsFor(
+        'postId',
+        rows.map((row) => row.id),
+        viewerId,
+      ),
+      this.launchesOf(rows),
+    ]);
 
     if (viewerId && rows.length > 0) {
       const where = {
@@ -357,6 +389,7 @@ export class PostsService {
         row,
         { isLiked: liked.has(row.id), isReposted: reposted.has(row.id) },
         reactions.get(row.id)!,
+        row.launchId ? (launches.get(row.launchId) ?? null) : null,
       ),
     );
   }

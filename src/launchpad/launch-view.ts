@@ -1,5 +1,9 @@
 import type { EvmChainConfig } from '../config/evm-chains.js';
-import type { Launch, LaunchContribution } from '../generated/prisma/client.js';
+import type {
+  Launch,
+  LaunchContribution,
+  LaunchProfile,
+} from '../generated/prisma/client.js';
 import type { ReactionCount } from '../reactions/reactions.service.js';
 import type { UserSummary } from '../users/user-profile.js';
 import {
@@ -132,6 +136,7 @@ export function toLaunchView(
   chain: EvmChainConfig,
   creatorUser: UserSummary | null,
   myContributions: LaunchContribution[],
+  profile: LaunchProfile | null,
   reactions: ReactionCount[],
   now: Date,
 ): LaunchView {
@@ -150,9 +155,9 @@ export function toLaunchView(
     chain: toChainView(chain),
     name: launch.name,
     symbol: launch.symbol,
-    description: launch.description,
-    image: launch.imageUrl,
-    detailsSetAt: launch.detailsSetAt?.toISOString() ?? null,
+    description: profile?.description ?? '',
+    image: profile?.imageUrl ?? null,
+    detailsSetAt: profile?.detailsSetAt.toISOString() ?? null,
     status: launchStatus(timeline, now),
     creator: { address: launch.creatorAddress, user: creatorUser },
     tokenAddress: launch.tokenAddress,

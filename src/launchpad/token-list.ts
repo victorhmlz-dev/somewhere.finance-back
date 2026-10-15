@@ -1,5 +1,4 @@
 import { getAddress } from 'viem';
-import type { Launch } from '../generated/prisma/client.js';
 
 /**
  * The token list format wallets and exchanges import (tokenlists.org, by
@@ -28,10 +27,14 @@ const DECIMALS = 18;
 const NAME_PATTERN = /^[ \S]{1,60}$/u;
 const SYMBOL_PATTERN = /^\S{1,20}$/u;
 
-type ListedLaunch = Pick<
-  Launch,
-  'tokenAddress' | 'name' | 'symbol' | 'imageUrl'
-> & { chainId: number };
+interface ListedLaunch {
+  chainId: number;
+  tokenAddress: string;
+  name: string;
+  symbol: string;
+  /** Set by the creator, if they did. */
+  imageUrl: string | null;
+}
 
 /**
  * The tokens of the launches that were listed, oldest first. A token joins
