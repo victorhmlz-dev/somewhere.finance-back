@@ -72,6 +72,13 @@ export class FakeChain implements ChainReader {
     return blockNumber;
   }
 
+  /** The hash the next block will give to the transaction of one event. */
+  nextTxHash(logIndex = 0): Hex {
+    return keccak256(
+      toHex(`tx-${this.blocks.length}-${logIndex}-${this.salt}`),
+    );
+  }
+
   /** Replaces a block by another with the same number, as a reorg does. */
   replaceBlock(blockNumber: number): void {
     this.salt += 1;

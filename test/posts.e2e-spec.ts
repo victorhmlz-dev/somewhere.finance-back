@@ -90,9 +90,13 @@ describe('Posts (e2e)', () => {
         image: 'https://example.com/bazaar.png',
         createdAt: expect.any(String),
         replyTo: null,
+        launch: null,
         stats: { replies: 0, reposts: 0, likes: 0, views: 0 },
         isLiked: false,
         isReposted: false,
+        reactions: ['rocket', 'fire', 'gem', 'eyes', 'joy', 'thumbs_down'].map(
+          (kind) => ({ kind, count: 0, reacted: false }),
+        ),
       });
 
       const seen = await api().get(`/posts/${post.id}`).expect(200);

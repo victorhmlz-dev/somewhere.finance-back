@@ -1,7 +1,12 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Page } from '../common/pagination.js';
+import type { Env } from '../config/env.js';
 import { Prisma } from '../generated/prisma/client.js';
-import type { NotificationType } from '../generated/prisma/enums.js';
+import type {
+  NotificationType,
+  ReactionKind,
+} from '../generated/prisma/enums.js';
 import type { PostView } from '../posts/post-view.js';
 import { PostsService } from '../posts/posts.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -18,38 +23,74 @@ import type {
 export interface NotificationView {
   id: string;
   type: NotificationType;
-  /** Who did it, most recent first, up to three. */
+  /** Who did it, most recent first, up to three. Empty for a `purchase`. */
   actors: UserSummary[];
   /** How many more did it besides the ones in `actors`. */
   otherActorCount: number;
   /**
-   * The post liked or reposted, or the post that mentions or replies.
-   * Null for a follow.
+   * The wallet that bought, for a `launch_purchase` made from a wallet with
+   * no Somewhere profile. `actors` is empty then.
+   */
+  actorAddress: string | null;
+  /**
+   * The post liked, reposted or reacted to, or the post that mentions,
+   * replies or comments. Null for a follow, a purchase or a reaction to a
+   * launch.
    */
   post: PostView | null;
+  /** The launch bought, commented on or reacted to. */
+  launch: NotificationLaunchView | null;
+  /** The emoji of a `reaction`. */
+  reaction: ReactionKind | null;
+  /**
+   * What one purchase paid, in wei, and the tokens it bought. Null for
+   * several purchases told together, and for anything else.
+   */
+  purchase: { nativeAmount: string; tokenAmount: string } | null;
   /** When the most recent actor did it. */
   createdAt: string;
   isUnread: boolean;
+}
+
+/** A launch as a notification shows it. */
+export interface NotificationLaunchView {
+  id: string;
+  name: string;
+  symbol: string;
+  image: string | null;
+  /** The currency it is bought with, e.g. "ETH". */
+  nativeSymbol: string;
 }
 
 interface NotificationGroup {
   id: string;
   type: NotificationType;
   post_id: string | null;
+  launch_id: string | null;
+  reaction: ReactionKind | null;
   actor_ids: string[];
+  actor_address: string | null;
   actor_count: number;
+  native_amount: string | null;
+  token_amount: string | null;
   created_at: Date;
   is_unread: boolean;
 }
 
-// What makes rows one notification: the likes or reposts that a post gets in
-// one day (UTC), or the follows of one day. A mention or a reply is never
+// What makes rows one notification: the likes, reposts or reactions (of one
+// emoji) that a post or a launch gets in one day (UTC), the purchases of one
+// launch in one day, or the follows of one day. Mentions, replies, comments,
+// your own purchases and purchases by wallets with no profile are never
 // grouped.
 const GROUP_KEY = Prisma.sql`
   n.type,
   n.post_id,
+  n.launch_id,
+  n.reaction,
   CASE
-    WHEN n.type IN ('mention', 'reply') THEN n.id::text
+    WHEN n.type IN ('mention', 'reply', 'launch_comment', 'purchase')
+      OR n.actor_id IS NULL
+      THEN n.id::text
     ELSE ((n.created_at AT TIME ZONE 'UTC')::date)::text
   END
 `;
@@ -58,15 +99,24 @@ const TAB_FILTER: Record<NotificationTab, Prisma.Sql> = {
   all: Prisma.empty,
   // Only what verified users did; the others are left out of each group too.
   verified: Prisma.sql`AND a.verified`,
-  mentions: Prisma.sql`AND n.type IN ('mention', 'reply')`,
+  mentions: Prisma.sql`AND n.type IN ('mention', 'reply', 'launch_comment')`,
 };
 
 @Injectable()
 export class NotificationsService {
+  private readonly nativeSymbols: Map<string, string>;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly posts: PostsService,
-  ) {}
+    config: ConfigService<Env, true>,
+  ) {
+    this.nativeSymbols = new Map(
+      config
+        .get('EVM_CHAINS', { infer: true })
+        .map((chain) => [chain.key, chain.nativeSymbol]),
+    );
+  }
 
   /** Newest first. A group is as recent as the last thing that joined it. */
   async list(
@@ -84,12 +134,21 @@ export class NotificationsService {
           (array_agg(n.id ORDER BY n.id DESC))[1] AS id,
           n.type::text AS type,
           n.post_id,
-          (array_agg(n.actor_id::text ORDER BY n.id DESC))[1:3] AS actor_ids,
+          n.launch_id,
+          n.reaction::text AS reaction,
+          (array_remove(
+            array_agg(n.actor_id::text ORDER BY n.id DESC), NULL
+          ))[1:3] AS actor_ids,
+          (array_agg(n.actor_address ORDER BY n.id DESC))[1] AS actor_address,
           count(*)::int AS actor_count,
+          (array_agg(n.native_amount::text ORDER BY n.id DESC))[1]
+            AS native_amount,
+          (array_agg(n.token_amount::text ORDER BY n.id DESC))[1]
+            AS token_amount,
           max(n.created_at) AS created_at,
           bool_or(n.read_at IS NULL) AS is_unread
         FROM notifications n
-        JOIN users a ON a.id = n.actor_id
+        LEFT JOIN users a ON a.id = n.actor_id
         WHERE n.recipient_id = ${userId}::uuid ${TAB_FILTER[query.tab]}
         GROUP BY ${GROUP_KEY}
       ) g
@@ -99,9 +158,21 @@ export class NotificationsService {
     `;
 
     const pageGroups = groups.slice(0, query.limit);
-    const [actors, postById] = await Promise.all([
+    const [actors, launches, postById] = await Promise.all([
       this.prisma.user.findMany({
         where: { id: { in: pageGroups.flatMap((group) => group.actor_ids) } },
+      }),
+      this.prisma.launch.findMany({
+        where: {
+          id: { in: pageGroups.flatMap((group) => group.launch_id ?? []) },
+        },
+        select: {
+          id: true,
+          chainKey: true,
+          name: true,
+          symbol: true,
+          imageUrl: true,
+        },
       }),
       // Looking at your notifications is not a view of the posts in them.
       this.posts.viewsById(
@@ -111,12 +182,15 @@ export class NotificationsService {
       ),
     ]);
     const actorById = new Map(actors.map((actor) => [actor.id, actor]));
+    const launchById = new Map(launches.map((launch) => [launch.id, launch]));
 
     const items: NotificationView[] = [];
     for (const group of pageGroups) {
       const post = group.post_id ? postById.get(group.post_id) : null;
-      // Skips what was deleted between the two queries.
-      if (post === undefined) continue;
+      const launch = group.launch_id ? launchById.get(group.launch_id) : null;
+      // Skips what was deleted between the queries.
+      if (post === undefined || launch === undefined) continue;
+      const single = group.actor_count === 1;
       items.push({
         id: group.id,
         type: group.type,
@@ -124,8 +198,29 @@ export class NotificationsService {
           const actor = actorById.get(id);
           return actor ? toUserSummary(actor) : [];
         }),
-        otherActorCount: group.actor_count - group.actor_ids.length,
+        otherActorCount:
+          group.actor_ids.length > 0
+            ? group.actor_count - group.actor_ids.length
+            : 0,
+        actorAddress: group.actor_ids.length === 0 ? group.actor_address : null,
         post,
+        launch: launch
+          ? {
+              id: launch.id,
+              name: launch.name,
+              symbol: launch.symbol,
+              image: launch.imageUrl,
+              nativeSymbol: this.nativeSymbols.get(launch.chainKey) ?? 'ETH',
+            }
+          : null,
+        reaction: group.reaction,
+        purchase:
+          single && group.native_amount && group.token_amount
+            ? {
+                nativeAmount: group.native_amount,
+                tokenAmount: group.token_amount,
+              }
+            : null,
         createdAt: group.created_at.toISOString(),
         isUnread: group.is_unread,
       });

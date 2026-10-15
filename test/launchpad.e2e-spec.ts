@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import Ajv from 'ajv';
-import addFormats from 'ajv-formats';
+import ajvModule from 'ajv';
+import ajvFormatsModule from 'ajv-formats';
 import sharp from 'sharp';
 import { getAddress, parseEther, type Hex } from 'viem';
 import type { App } from 'supertest/types.js';
@@ -23,6 +23,10 @@ import { PrismaService } from '../src/prisma/prisma.service.js';
 import { FakeChain, type FakeEvent } from './fake-chain.js';
 import { apiClient, signIn, type TestSession } from './session.js';
 import { createEvmWallet } from './wallets.js';
+
+// Both are CommonJS packages: their export is under `default`
+const Ajv = ajvModule.default;
+const addFormats = ajvFormatsModule.default;
 
 // The official schema of the token list format, from @uniswap/token-lists
 const tokenListSchema = createRequire(import.meta.url)(
@@ -173,6 +177,9 @@ describe('Launchpad (e2e)', () => {
       .expect(201);
     return response.body.url as string;
   };
+
+  const notificationsOf = async (session: TestSession) =>
+    (await api(session).get('/notifications').expect(200)).body.items;
 
   const uniqueSymbol = () => `T${randomBytes(4).toString('hex').toUpperCase()}`;
 
@@ -601,75 +608,336 @@ describe('Launchpad (e2e)', () => {
   });
 
   describe('the creator of a launch', () => {
-    async function ownLaunch() {
+    /** A launch of a new user that has not started yet. */
+    async function ownLaunch(startsIn = DAY) {
       const { wallet, session } = await newUser();
       const symbol = uniqueSymbol();
+      const now = Date.now();
       chain.mine([
-        newLaunch({ symbol, creator: wallet.address.toLowerCase() as Hex })
-          .created,
+        newLaunch({
+          symbol,
+          creator: wallet.address.toLowerCase() as Hex,
+          startTime: new Date(now + startsIn),
+          endTime: new Date(now + startsIn + DAY),
+        }).created,
       ]);
       await sync();
       return { session, launch: await findLaunch(symbol) };
     }
 
-    it('is shown with their Somewhere profile and can describe the launch', async () => {
+    it('is shown with their Somewhere profile', async () => {
       const { session, launch } = await ownLaunch();
-      const other = await newUser();
       expect(launch.creator.user).toMatchObject({
         handle: session.user.handle,
       });
+      expect(launch.detailsSetAt).toBeNull();
+    });
 
-      const changes = {
-        description: '  Governance token for Void Protocol holders.  ',
-      };
-      await api().patch(`/launches/${launch.id}`).send(changes).expect(401);
-      await api(other.session)
-        .patch(`/launches/${launch.id}`)
-        .send(changes)
-        .expect(403);
-      await api(session)
-        .patch(`/launches/${launch.id}`)
-        .send({ hardCap: '1' })
-        .expect(400);
+    it('describes the launch once, before the sale starts, with an image uploaded here', async () => {
+      const { session, launch } = await ownLaunch();
+      const other = await newUser();
+      const image = await uploadImage(session, '#5142fc');
+      const details = { description: '  Credits for the arcade.  ', image };
+      const put = (as: TestSession | undefined, body: object) =>
+        api(as).put(`/launches/${launch.id}/details`).send(body);
 
-      const edited = await api(session)
-        .patch(`/launches/${launch.id}`)
-        .send(changes)
-        .expect(200);
-      expect(edited.body).toMatchObject({
-        description: 'Governance token for Void Protocol holders.',
-        image: null,
+      await put(undefined, details).expect(401);
+      await put(other.session, details).expect(403);
+      await put(session, { ...details, hardCap: '1' }).expect(400);
+      await put(session, {
+        ...details,
+        image: 'https://example.com/void.png',
+      }).expect(400);
+      await put(session, {
+        ...details,
+        image: `https://api.test/uploads/${'a'.repeat(64)}.png`,
+      }).expect(400);
+
+      const set = await put(session, details).expect(200);
+      expect(set.body).toMatchObject({
+        description: 'Credits for the arcade.',
+        image,
+        detailsSetAt: expect.any(String),
         // Nothing that lives on chain can be touched this way.
         hardCap: parseEther('10').toString(),
       });
 
-      const again = await api(session)
-        .patch(`/launches/${launch.id}`)
-        .send({ description: 'Second thoughts.' })
-        .expect(200);
-      expect(again.body.description).toBe('Second thoughts.');
+      // Never again, not even the description alone
+      await put(session, { description: 'Second thoughts.' }).expect(409);
+      expect((await findLaunch(launch.symbol)).description).toBe(
+        'Credits for the arcade.',
+      );
     });
 
-    it('sets the image once, only to an image uploaded to Somewhere', async () => {
-      const { session, launch } = await ownLaunch();
-      const blue = await uploadImage(session, '#5142fc');
-      const red = await uploadImage(session, '#ff0000');
-      const patch = (body: object) =>
-        api(session).patch(`/launches/${launch.id}`).send(body);
+    it('cannot describe a launch whose sale has started', async () => {
+      const { session, launch } = await ownLaunch(-HOUR);
+      expect(launch.status).toBe('live');
+      await api(session)
+        .put(`/launches/${launch.id}/details`)
+        .send({ description: 'Too late.' })
+        .expect(409);
+    });
 
-      await patch({ image: 'https://example.com/void.png' }).expect(400);
-      await patch({
-        image: `https://api.test/uploads/${'a'.repeat(64)}.png`,
-      }).expect(400);
-      await patch({ image: null }).expect(400);
+    it('sends the details with the transaction, before the launch is indexed', async () => {
+      const { wallet, session } = await newUser();
+      const intruder = await newUser();
+      const symbol = uniqueSymbol();
+      const now = Date.now();
+      const launch = newLaunch({
+        symbol,
+        creator: wallet.address.toLowerCase() as Hex,
+        startTime: new Date(now + DAY),
+        endTime: new Date(now + 2 * DAY),
+      });
+      const txHash = chain.nextTxHash();
+      const image = await uploadImage(session, '#00aa88');
+      const send = (as: TestSession, description: string) =>
+        api(as)
+          .post('/launches/details')
+          .send({ chain: chainKey, txHash, description, image });
 
-      expect((await patch({ image: blue }).expect(200)).body.image).toBe(blue);
-      // Sending the same image again is not a change
-      await patch({ image: blue, description: 'Still blue' }).expect(200);
-      await patch({ image: red }).expect(409);
-      await patch({ image: null }).expect(400);
+      // Someone else claims the same transaction first: it does not count
+      await send(intruder.session, 'Not mine to say.').expect(202);
+      const waiting = await send(session, 'Sent before it was indexed.').expect(
+        202,
+      );
+      expect(waiting.body).toEqual({ launch: null });
+      await api(session)
+        .post('/launches/details')
+        .send({ chain: 'nope', txHash, description: '' })
+        .expect(400);
 
-      expect((await findLaunch(launch.symbol)).image).toBe(blue);
+      chain.mine([launch.created]);
+      await sync();
+      const indexed = await findLaunch(symbol);
+      expect(indexed).toMatchObject({
+        description: 'Sent before it was indexed.',
+        image,
+        detailsSetAt: expect.any(String),
+      });
+      expect(
+        await prisma.pendingLaunchDetails.count({ where: { txHash } }),
+      ).toBe(0);
+
+      // Once indexed, the same route answers with the launch, or refuses
+      await send(session, 'Again.').expect(409);
+    });
+  });
+
+  describe('purchases', () => {
+    it('tell the creator who bought, and the buyer what they bought', async () => {
+      const creator = await newUser();
+      const buyer = await newUser();
+      const symbol = uniqueSymbol();
+      const launch = newLaunch({
+        symbol,
+        creator: creator.wallet.address.toLowerCase() as Hex,
+      });
+      const anonymous = randomAddress();
+      chain.mine([launch.created]);
+      chain.mine([
+        launch.contributed(
+          buyer.wallet.address.toLowerCase() as Hex,
+          '0.5',
+          '0.5',
+        ),
+        launch.contributed(anonymous, '1', '1.5'),
+      ]);
+      await sync();
+
+      const creatorItems = await notificationsOf(creator.session);
+      expect(creatorItems).toHaveLength(2);
+      // 0.5 of a 10 hard cap buys 5% of the 582,352 tokens for sale
+      const halfEthTokens = parseEther('29117.6').toString();
+      expect(creatorItems[1]).toMatchObject({
+        type: 'launch_purchase',
+        actors: [{ handle: buyer.session.user.handle }],
+        actorAddress: null,
+        launch: { symbol, nativeSymbol: 'TST' },
+        purchase: {
+          nativeAmount: parseEther('0.5').toString(),
+          tokenAmount: halfEthTokens,
+        },
+      });
+      expect(creatorItems[0]).toMatchObject({
+        type: 'launch_purchase',
+        actors: [],
+        actorAddress: anonymous.toLowerCase(),
+      });
+
+      const buyerItems = await notificationsOf(buyer.session);
+      expect(buyerItems).toEqual([
+        expect.objectContaining({
+          type: 'purchase',
+          actors: [],
+          launch: expect.objectContaining({ symbol }),
+          purchase: {
+            nativeAmount: parseEther('0.5').toString(),
+            tokenAmount: halfEthTokens,
+          },
+        }),
+      ]);
+    });
+  });
+
+  describe('the conversation of a launch', () => {
+    it('collects comments and replies, and tells the creator about each', async () => {
+      const creator = await newUser();
+      const fan = await newUser();
+      const critic = await newUser();
+      const symbol = uniqueSymbol();
+      chain.mine([
+        newLaunch({
+          symbol,
+          creator: creator.wallet.address.toLowerCase() as Hex,
+        }).created,
+      ]);
+      await sync();
+      const { id } = await findLaunch(symbol);
+
+      const comment = await api(fan.session)
+        .post('/posts')
+        .send({ text: 'Looks solid.', launchId: id })
+        .expect(201);
+      expect(comment.body.launch).toEqual({
+        id,
+        name: 'Void Token',
+        symbol,
+        image: null,
+      });
+      const reply = await api(critic.session)
+        .post('/posts')
+        .send({ text: 'Not so sure.', replyToId: comment.body.id })
+        .expect(201);
+      // A reply belongs to the launch of what it answers
+      expect(reply.body.launch?.id).toBe(id);
+      await api(fan.session)
+        .post('/posts')
+        .send({
+          text: 'Twice?',
+          launchId: id,
+          replyToId: comment.body.id,
+        })
+        .expect(400);
+      await api(fan.session)
+        .post('/posts')
+        .send({
+          text: 'Lost.',
+          launchId: '01920000-0000-7000-8000-000000000000',
+        })
+        .expect(404);
+
+      const comments = await api().get(`/launches/${id}/comments`).expect(200);
+      expect(
+        comments.body.items.map((post: { id: string }) => post.id),
+      ).toEqual([comment.body.id]);
+
+      const told = await notificationsOf(creator.session);
+      expect(
+        told.map((item: { type: string; post: { id: string } }) => [
+          item.type,
+          item.post.id,
+        ]),
+      ).toEqual([
+        ['launch_comment', reply.body.id],
+        ['launch_comment', comment.body.id],
+      ]);
+      // The commenter hears about the reply to their comment
+      expect((await notificationsOf(fan.session))[0]).toMatchObject({
+        type: 'reply',
+      });
+    });
+
+    it('takes emoji reactions on the launch and on its comments', async () => {
+      const creator = await newUser();
+      const fan = await newUser();
+      const symbol = uniqueSymbol();
+      chain.mine([
+        newLaunch({
+          symbol,
+          creator: creator.wallet.address.toLowerCase() as Hex,
+        }).created,
+      ]);
+      await sync();
+      const { id } = await findLaunch(symbol);
+      const count = (
+        reactions: { kind: string; count: number; reacted: boolean }[],
+        kind: string,
+      ) => reactions.find((reaction) => reaction.kind === kind);
+
+      await api(fan.session).put(`/launches/${id}/reactions/heart`).expect(400);
+      await api().put(`/launches/${id}/reactions/rocket`).expect(401);
+      await api(fan.session)
+        .put(`/launches/${id}/reactions/rocket`)
+        .expect(200);
+      const both = await api(fan.session)
+        .put(`/launches/${id}/reactions/gem`)
+        .expect(200);
+      // Reacting twice with the same emoji changes nothing
+      await api(fan.session).put(`/launches/${id}/reactions/gem`).expect(200);
+      expect(count(both.body.reactions, 'rocket')).toEqual({
+        kind: 'rocket',
+        count: 1,
+        reacted: true,
+      });
+      expect(count(both.body.reactions, 'gem')?.count).toBe(1);
+      const seenByCreator = await api(creator.session)
+        .get(`/launches/${id}`)
+        .expect(200);
+      expect(count(seenByCreator.body.reactions, 'rocket')).toEqual({
+        kind: 'rocket',
+        count: 1,
+        reacted: false,
+      });
+
+      const comment = await api(creator.session)
+        .post('/posts')
+        .send({ text: 'Thanks for the support!', launchId: id })
+        .expect(201);
+      const reacted = await api(fan.session)
+        .put(`/posts/${comment.body.id}/reactions/fire`)
+        .expect(200);
+      expect(count(reacted.body.reactions, 'fire')).toEqual({
+        kind: 'fire',
+        count: 1,
+        reacted: true,
+      });
+
+      const told = await notificationsOf(creator.session);
+      expect(
+        told.map(
+          (item: {
+            type: string;
+            reaction: string;
+            post: { id: string } | null;
+          }) => [item.type, item.reaction, item.post?.id ?? null],
+        ),
+      ).toEqual([
+        ['reaction', 'fire', comment.body.id],
+        ['reaction', 'gem', null],
+        ['reaction', 'rocket', null],
+      ]);
+
+      await api(fan.session)
+        .delete(`/launches/${id}/reactions/gem`)
+        .expect(200);
+      await api(fan.session)
+        .delete(`/posts/${comment.body.id}/reactions/fire`)
+        .expect(200);
+      const after = await notificationsOf(creator.session);
+      expect(after.map((item: { reaction: string }) => item.reaction)).toEqual([
+        'rocket',
+      ]);
+    });
+  });
+
+  describe('a change of contract', () => {
+    it('stops the indexer instead of mixing two launchpads', async () => {
+      chain.mine();
+      await sync();
+      await expect(
+        indexer.sync({ ...chainConfig, launchpad: randomAddress() }, chain),
+      ).rejects.toThrow(/launchpad:reset/);
     });
   });
 
@@ -697,7 +965,8 @@ describe('Launchpad (e2e)', () => {
       const before = (await api().get('/launches/token-list').expect(200)).body;
       const { id } = await findLaunch(withImage.params.symbol);
       const image = await uploadImage(session, '#00ff00');
-      await api(session).patch(`/launches/${id}`).send({ image }).expect(200);
+      // Details can only be set before the start: this one is set directly
+      await prisma.launch.update({ where: { id }, data: { imageUrl: image } });
 
       const list = (await api().get('/launches/token-list').expect(200)).body;
       const validate = addFormats(new Ajv({ allErrors: true })).compile(

@@ -1,5 +1,6 @@
 import type { EvmChainConfig } from '../config/evm-chains.js';
 import type { Launch, LaunchContribution } from '../generated/prisma/client.js';
+import type { ReactionCount } from '../reactions/reactions.service.js';
 import type { UserSummary } from '../users/user-profile.js';
 import {
   finalizeDeadline,
@@ -49,6 +50,11 @@ export interface LaunchView {
   symbol: string;
   description: string;
   image: string | null;
+  /**
+   * When the creator set the description and image. Null while they can
+   * still be set: once, before the sale starts.
+   */
+  detailsSetAt: string | null;
   status: LaunchStatus;
   creator: { address: string; user: UserSummary | null };
 
@@ -94,6 +100,9 @@ export interface LaunchView {
 
   /** The viewer's own contribution. Null without a session or without one. */
   myContribution: ContributionView | null;
+
+  /** Every emoji reaction to the launch, with zero when nobody used it. */
+  reactions: ReactionCount[];
 }
 
 const bpsToPercent = (bps: number) => bps / 100;
@@ -123,6 +132,7 @@ export function toLaunchView(
   chain: EvmChainConfig,
   creatorUser: UserSummary | null,
   myContributions: LaunchContribution[],
+  reactions: ReactionCount[],
   now: Date,
 ): LaunchView {
   const timeline = {
@@ -142,6 +152,7 @@ export function toLaunchView(
     symbol: launch.symbol,
     description: launch.description,
     image: launch.imageUrl,
+    detailsSetAt: launch.detailsSetAt?.toISOString() ?? null,
     status: launchStatus(timeline, now),
     creator: { address: launch.creatorAddress, user: creatorUser },
     tokenAddress: launch.tokenAddress,
@@ -176,5 +187,6 @@ export function toLaunchView(
           }
         : null,
     myContribution: toContributionView(myContributions),
+    reactions,
   };
 }

@@ -16,11 +16,15 @@ import {
   type ChainReader,
   type ChainReaderFactory,
 } from './chain-reader.js';
+import { applyPendingDetails } from './launch-details.js';
 import {
   applyLog,
   newLaunchAddresses,
   type LogSource,
 } from './launch-events.js';
+
+/** How long the details of a launch wait for the launch to be indexed. */
+const PENDING_DETAILS_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Contract addresses per request to the node. */
 const ADDRESSES_PER_REQUEST = 500;
@@ -90,6 +94,13 @@ export class LaunchIndexerService
     const cursor = await this.prisma.chainCursor.findUnique({
       where: { chainKey: chain.key },
     });
+    if (cursor?.launchpad && cursor.launchpad !== chain.launchpad) {
+      throw new Error(
+        `${chain.key}: the configured Launchpad (${chain.launchpad}) is not ` +
+          `the one indexed so far (${cursor.launchpad}). To index the new ` +
+          `one, stop the API and run "npm run launchpad:reset -- ${chain.key}".`,
+      );
+    }
     if (cursor) {
       const block = await reader
         .getBlock(BigInt(cursor.lastBlock))
@@ -120,7 +131,38 @@ export class LaunchIndexerService
       await this.indexRange(chain, reader, from, to);
       from = to + 1n;
     }
+    await this.settlePendingDetails(chain);
     return Number(from - first);
+  }
+
+  /**
+   * Applies details that arrived while their launch was being indexed, which
+   * the indexer could not see then, and forgets the ones that waited too long.
+   */
+  private async settlePendingDetails(chain: EvmChainConfig): Promise<void> {
+    const now = new Date();
+    await this.prisma.pendingLaunchDetails.deleteMany({
+      where: {
+        chainKey: chain.key,
+        createdAt: { lt: new Date(now.getTime() - PENDING_DETAILS_TTL_MS) },
+      },
+    });
+    const pending = await this.prisma.pendingLaunchDetails.findMany({
+      where: { chainKey: chain.key },
+      select: { txHash: true },
+    });
+    if (pending.length === 0) return;
+    const launches = await this.prisma.launch.findMany({
+      where: {
+        chainKey: chain.key,
+        createdTxHash: { in: pending.map((row) => row.txHash) },
+      },
+    });
+    for (const launch of launches) {
+      await this.prisma.$transaction((tx) =>
+        applyPendingDetails(tx, launch, now),
+      );
+    }
   }
 
   private async indexRange(
@@ -197,6 +239,7 @@ export class LaunchIndexerService
         }
 
         const position = {
+          launchpad: chain.launchpad,
           lastBlock: Number(toBlock),
           lastHash: blocks.get(toBlock)!.hash,
         };

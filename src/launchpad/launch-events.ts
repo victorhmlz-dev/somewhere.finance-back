@@ -1,11 +1,13 @@
 import { decodeEventLog, type Abi } from 'viem';
-import type { Prisma } from '../generated/prisma/client.js';
+import type { Launch, Prisma } from '../generated/prisma/client.js';
+import { addNotification } from '../notifications/notification-events.js';
 import {
   creatorVestingEvents,
   launchpadEvents,
   tokenSaleEvents,
 } from './abi.js';
 import type { ChainLog } from './chain-reader.js';
+import { applyPendingDetails } from './launch-details.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -150,7 +152,7 @@ async function createLaunch(
   event: LaunchCreated,
 ): Promise<void> {
   const { params } = event;
-  await tx.launch.create({
+  const launch = await tx.launch.create({
     data: {
       chainKey: context.chainKey,
       launchId: Number(event.launchId),
@@ -176,15 +178,25 @@ async function createLaunch(
       vestingTranches: params.vestingTranches,
       createdAt: context.blockTime,
       createdBlock: Number(log.blockNumber),
-      createdTxHash: log.transactionHash,
+      createdTxHash: log.transactionHash.toLowerCase(),
     },
   });
+  // The creator may have sent its description and image already
+  await applyPendingDetails(tx, launch, new Date());
 }
 
-type LaunchRow = { id: string; hardCap: Prisma.Decimal };
+/** The user who holds an EVM wallet, if any does. */
+async function userOfWallet(tx: Tx, address: string): Promise<string | null> {
+  const wallet = await tx.wallet.findFirst({
+    where: { family: 'evm', address },
+    select: { userId: true },
+  });
+  return wallet?.userId ?? null;
+}
+
 type Handler = (
   tx: Tx,
-  launch: LaunchRow,
+  launch: Launch,
   args: Record<string, unknown>,
   blockTime: Date,
 ) => Promise<void>;
@@ -220,6 +232,36 @@ const HANDLERS: Record<string, Handler> = {
           : undefined,
       },
     });
+
+    // The same rounding as TokenSale.tokensFor
+    const tokens =
+      ((args.amount as bigint) * BigInt(launch.tokensForSale.toFixed())) /
+      BigInt(launch.hardCap.toFixed());
+    const purchase = {
+      launchId: launch.id,
+      nativeAmount: amount,
+      tokenAmount: tokens.toString(),
+      createdAt: blockTime,
+    };
+    const buyerId = await userOfWallet(tx, contributor);
+    const creatorId = await userOfWallet(tx, launch.creatorAddress);
+    if (creatorId) {
+      await addNotification(tx, {
+        ...purchase,
+        type: 'launch_purchase',
+        recipientId: creatorId,
+        actorId: buyerId,
+        actorAddress: buyerId ? undefined : contributor,
+      });
+    }
+    if (buyerId) {
+      await addNotification(tx, {
+        ...purchase,
+        type: 'purchase',
+        recipientId: buyerId,
+        actorId: null,
+      });
+    }
   },
 
   async Finalized(tx, launch, args, blockTime) {

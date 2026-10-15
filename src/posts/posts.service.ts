@@ -11,11 +11,13 @@ import {
   toPage,
 } from '../common/pagination.js';
 import type { Prisma } from '../generated/prisma/client.js';
+import type { ReactionKind } from '../generated/prisma/enums.js';
 import {
   addNotification,
   removeNotification,
 } from '../notifications/notification-events.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { ReactionsService } from '../reactions/reactions.service.js';
 import { CreatePostDto } from './dto/create-post.dto.js';
 import { extractHashtags } from './hashtags.js';
 import { extractMentions } from './mentions.js';
@@ -32,15 +34,32 @@ const COUNTER = { like: 'likesCount', repost: 'repostsCount' } as const;
 
 @Injectable()
 export class PostsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly reactions: ReactionsService,
+  ) {}
 
   async create(authorId: string, dto: CreatePostDto): Promise<PostView> {
     const text = dto.text ?? '';
     if (!text && !dto.image) {
       throw new BadRequestException('A post needs text or an image');
     }
+    if (dto.replyToId && dto.launchId) {
+      throw new BadRequestException(
+        'A reply belongs to the launch of the post it replies to',
+      );
+    }
     const parent = dto.replyToId
       ? await this.assertExists(dto.replyToId)
+      : null;
+    const launchId = parent ? parent.launchId : dto.launchId;
+    const launch = launchId
+      ? await this.prisma.launch.findUnique({ where: { id: launchId } })
+      : null;
+    if (launchId && !launch) throw new NotFoundException('Launch not found');
+    // The creator of the launch hears about every comment in it
+    const launchOwnerId = launch
+      ? await this.userOfWallet(launch.creatorAddress)
       : null;
     const mentioned = await this.prisma.user.findMany({
       where: { handle: { in: extractMentions(text) } },
@@ -60,6 +79,7 @@ export class PostsService {
           text,
           imageUrl: dto.image,
           parentId: parent?.id,
+          launchId: launch?.id,
           hashtags: { create: extractHashtags(text) },
         },
       });
@@ -79,6 +99,18 @@ export class PostsService {
           ...event,
           type: 'mention',
           recipientId: user.id,
+        });
+      }
+      // Unless the creator already hears about it as a reply or a mention
+      const alreadyTold =
+        launchOwnerId === parent?.authorId ||
+        mentioned.some((user) => user.id === launchOwnerId);
+      if (launch && launchOwnerId && !alreadyTold) {
+        await addNotification(tx, {
+          ...event,
+          type: 'launch_comment',
+          recipientId: launchOwnerId,
+          launchId: launch.id,
         });
       }
       return created;
@@ -151,6 +183,35 @@ export class PostsService {
     );
   }
 
+  /**
+   * The comments on a launch, newest first. Only the ones that start a
+   * conversation; their replies are read with `listReplies`.
+   */
+  async listLaunchComments(
+    launchId: string,
+    query: PaginationQueryDto,
+    viewerId?: string,
+  ): Promise<Page<PostView>> {
+    const rows = await this.prisma.post.findMany({
+      where: { launchId, parentId: null, deletedAt: null },
+      include: POST_INCLUDE,
+      ...pageArgs(query),
+    });
+    return this.toPostPage(rows, query.limit, viewerId);
+  }
+
+  /** Adds or removes an emoji reaction, and returns the post as it is now. */
+  async setReaction(
+    userId: string,
+    postId: string,
+    kind: ReactionKind,
+    on: boolean,
+  ): Promise<PostView> {
+    const post = await this.assertExists(postId);
+    await this.reactions.set(userId, { postId }, kind, on, post.authorId);
+    return this.view(postId, userId);
+  }
+
   /** Replies to a post, oldest first, so a conversation reads top to bottom. */
   async listReplies(
     id: string,
@@ -182,6 +243,15 @@ export class PostsService {
     if (countViews) await this.countViews(rows);
     const views = await this.toViews(rows, viewerId);
     return new Map(views.map((view) => [view.id, view]));
+  }
+
+  /** The user who holds an EVM wallet, if any does. */
+  private async userOfWallet(address: string): Promise<string | null> {
+    const wallet = await this.prisma.wallet.findFirst({
+      where: { family: 'evm', address: address.toLowerCase() },
+      select: { userId: true },
+    });
+    return wallet?.userId ?? null;
   }
 
   private async assertExists(id: string) {
@@ -263,6 +333,11 @@ export class PostsService {
   ): Promise<PostView[]> {
     const liked = new Set<string>();
     const reposted = new Set<string>();
+    const reactions = await this.reactions.countsFor(
+      'postId',
+      rows.map((row) => row.id),
+      viewerId,
+    );
 
     if (viewerId && rows.length > 0) {
       const where = {
@@ -278,10 +353,11 @@ export class PostsService {
     }
 
     return rows.map((row) =>
-      toPostView(row, {
-        isLiked: liked.has(row.id),
-        isReposted: reposted.has(row.id),
-      }),
+      toPostView(
+        row,
+        { isLiked: liked.has(row.id), isReposted: reposted.has(row.id) },
+        reactions.get(row.id)!,
+      ),
     );
   }
 }

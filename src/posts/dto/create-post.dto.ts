@@ -27,4 +27,12 @@ export class CreatePostDto {
   @IsOptional()
   @IsUUID()
   replyToId?: string;
+
+  /**
+   * Id of the launch this post comments on. A reply needs none: it belongs
+   * to the launch of the post it replies to.
+   */
+  @IsOptional()
+  @IsUUID()
+  launchId?: string;
 }

@@ -5,6 +5,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import type { ReactionKind } from '../generated/prisma/enums.js';
+import { ReactionsService } from '../reactions/reactions.service.js';
 import { ConfigService } from '@nestjs/config';
 import { type Page, pageArgs } from '../common/pagination.js';
 import type { Env } from '../config/env.js';
@@ -21,7 +23,17 @@ import {
   ListLaunchesQueryDto,
   type LaunchStatusFilter,
 } from './dto/list-launches-query.dto.js';
-import { UpdateLaunchDto } from './dto/update-launch.dto.js';
+import {
+  LaunchDetailsDto,
+  PendingLaunchDetailsDto,
+} from './dto/launch-details.dto.js';
+import {
+  applyLaunchDetails,
+  applyPendingDetails,
+  type DetailsRefusal,
+  evmWalletsOf,
+  type LaunchDetails,
+} from './launch-details.js';
 import {
   type ChainView,
   type LaunchView,
@@ -53,6 +65,20 @@ function statusCondition(
   };
 }
 
+/** The answer for each reason the details of a launch were not set. */
+const REFUSALS: Record<DetailsRefusal, () => Error> = {
+  'not-creator': () =>
+    new ForbiddenException('Only the creator can describe a launch'),
+  'already-set': () =>
+    new ConflictException(
+      'The description and image of a launch are set once and never change',
+    ),
+  started: () =>
+    new ConflictException(
+      'The description and image can only be set before the sale starts',
+    ),
+};
+
 @Injectable()
 export class LaunchesService {
   private readonly chains: Map<string, EvmChainConfig>;
@@ -60,6 +86,7 @@ export class LaunchesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly uploads: UploadsService,
+    private readonly reactions: ReactionsService,
     config: ConfigService<Env, true>,
   ) {
     const chains = config.get('EVM_CHAINS', { infer: true });
@@ -137,48 +164,97 @@ export class LaunchesService {
     return view;
   }
 
-  /** Only the user who holds the wallet that created the launch can edit it. */
-  async update(
+  /**
+   * Sets the description and image of a launch that is already indexed:
+   * once, by its creator, before the sale starts.
+   */
+  async setDetails(
     id: string,
     userId: string,
-    dto: UpdateLaunchDto,
+    dto: LaunchDetailsDto,
   ): Promise<LaunchView> {
     const launch = await this.findConfigured(id);
-    const wallets = await this.evmWalletsOf(userId);
-    if (!wallets.includes(launch.creatorAddress)) {
-      throw new ForbiddenException('Only the creator can edit a launch');
-    }
-
-    if (dto.image !== undefined && dto.image !== launch.imageUrl) {
-      await this.setImage(launch, dto.image);
-    }
-    if (dto.description !== undefined) {
-      await this.prisma.launch.update({
-        where: { id },
-        data: { description: dto.description },
-      });
-    }
+    const details = await this.checkDetails(dto);
+    const refusal = await this.prisma.$transaction((tx) =>
+      applyLaunchDetails(tx, launch, userId, details, new Date()),
+    );
+    if (refusal) throw REFUSALS[refusal]();
     return this.get(id, userId);
   }
 
-  /** The image is set once, only to a file uploaded to this API. */
-  private async setImage(launch: Launch, url: string): Promise<void> {
-    if (launch.imageUrl) {
-      throw new ConflictException('The image of a launch cannot be changed');
+  /**
+   * Takes the description and image of a launch right after the transaction
+   * that creates it. If the launch is not indexed yet, they wait for it and
+   * the answer is null; the indexer applies them, if the transaction turns
+   * out to be the user's, as soon as it reads the launch.
+   */
+  async sendDetails(
+    userId: string,
+    dto: PendingLaunchDetailsDto,
+  ): Promise<LaunchView | null> {
+    if (!this.chains.has(dto.chain)) {
+      throw new BadRequestException('chain is not a configured chain');
     }
-    if (!(await this.uploads.storedNameOf(url))) {
+    const details = await this.checkDetails(dto);
+    const indexed = () =>
+      this.prisma.launch.findFirst({
+        where: { chainKey: dto.chain, createdTxHash: dto.txHash },
+      });
+
+    const launch = await indexed();
+    if (launch) return this.setDetails(launch.id, userId, dto);
+
+    const key = { chainKey: dto.chain, txHash: dto.txHash, userId };
+    await this.prisma.pendingLaunchDetails.upsert({
+      where: { chainKey_txHash_userId: key },
+      create: { ...key, ...details },
+      update: details,
+    });
+
+    // The indexer may have read the launch in the meantime
+    const late = await indexed();
+    if (!late) return null;
+    await this.prisma.$transaction((tx) =>
+      applyPendingDetails(tx, late, new Date()),
+    );
+    return this.get(late.id, userId);
+  }
+
+  /** Adds or removes an emoji reaction, and returns the launch as it is now. */
+  async setReaction(
+    id: string,
+    userId: string,
+    kind: ReactionKind,
+    on: boolean,
+  ): Promise<LaunchView> {
+    const launch = await this.findConfigured(id);
+    const owner = await this.prisma.wallet.findFirst({
+      where: { family: 'evm', address: launch.creatorAddress },
+      select: { userId: true },
+    });
+    await this.reactions.set(
+      userId,
+      { launchId: id },
+      kind,
+      on,
+      owner?.userId ?? null,
+    );
+    return this.get(id, userId);
+  }
+
+  /** Answers 404 unless the launch exists on a configured chain. */
+  async assertExists(id: string): Promise<void> {
+    await this.findConfigured(id);
+  }
+
+  /** The description, and the image only if it was uploaded here. */
+  private async checkDetails(dto: LaunchDetailsDto): Promise<LaunchDetails> {
+    if (dto.image && !(await this.uploads.storedNameOf(dto.image))) {
       throw new BadRequestException(
         'image must be an image uploaded to Somewhere',
       );
     }
-    // Conditional, so two requests at once cannot both set it
-    const { count } = await this.prisma.launch.updateMany({
-      where: { id: launch.id, imageUrl: null },
-      data: { imageUrl: url },
-    });
-    if (count === 0) {
-      throw new ConflictException('The image of a launch cannot be changed');
-    }
+    return { description: dto.description, imageUrl: dto.image ?? null };
   }
 
   private async findConfigured(id: string): Promise<Launch> {
@@ -187,14 +263,6 @@ export class LaunchesService {
       throw new NotFoundException('Launch not found');
     }
     return launch;
-  }
-
-  private async evmWalletsOf(userId: string): Promise<string[]> {
-    const wallets = await this.prisma.wallet.findMany({
-      where: { userId, family: 'evm' },
-      select: { address: true },
-    });
-    return wallets.map((wallet) => wallet.address);
   }
 
   private async toViews(
@@ -224,7 +292,7 @@ export class LaunchesService {
       const contributions = await this.prisma.launchContribution.findMany({
         where: {
           launchRowId: { in: launches.map((launch) => launch.id) },
-          contributor: { in: await this.evmWalletsOf(viewerId) },
+          contributor: { in: await evmWalletsOf(this.prisma, viewerId) },
         },
       });
       for (const contribution of contributions) {
@@ -234,12 +302,19 @@ export class LaunchesService {
       }
     }
 
+    const reactions = await this.reactions.countsFor(
+      'launchId',
+      launches.map((launch) => launch.id),
+      viewerId,
+    );
+
     return launches.map((launch) =>
       toLaunchView(
         launch,
         this.chains.get(launch.chainKey)!,
         userByAddress.get(launch.creatorAddress) ?? null,
         mine.get(launch.id) ?? [],
+        reactions.get(launch.id)!,
         now,
       ),
     );

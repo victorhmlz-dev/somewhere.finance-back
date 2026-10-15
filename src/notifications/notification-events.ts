@@ -1,12 +1,26 @@
 import type { Prisma } from '../generated/prisma/client.js';
-import type { NotificationType } from '../generated/prisma/enums.js';
+import type {
+  NotificationType,
+  ReactionKind,
+} from '../generated/prisma/enums.js';
 
 export interface NotificationEvent {
   recipientId: string;
-  actorId: string;
+  /** Who did it. Null when nobody did: a purchase told to its own buyer. */
+  actorId: string | null;
   type: NotificationType;
-  /** The post involved. Leave it out for a follow. */
+  /** The wallet that did it, when it belongs to no user. */
+  actorAddress?: string;
+  /** The post involved. Leave it out for a follow or a purchase. */
   postId?: string;
+  /** The launch involved, for purchases, comments and reactions to it. */
+  launchId?: string;
+  reaction?: ReactionKind;
+  /** For a purchase: wei paid and tokens bought, as integers in text. */
+  nativeAmount?: string;
+  tokenAmount?: string;
+  /** When it happened, if not now: a purchase happened in its block. */
+  createdAt?: Date;
 }
 
 // The two functions below run inside the transaction of what causes the
@@ -27,6 +41,13 @@ export async function removeNotification(
   event: NotificationEvent,
 ): Promise<void> {
   await tx.notification.deleteMany({
-    where: { ...event, postId: event.postId ?? null },
+    where: {
+      recipientId: event.recipientId,
+      actorId: event.actorId,
+      type: event.type,
+      postId: event.postId ?? null,
+      launchId: event.launchId ?? null,
+      reaction: event.reaction ?? null,
+    },
   });
 }

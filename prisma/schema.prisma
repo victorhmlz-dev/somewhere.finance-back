@@ -32,16 +32,18 @@ model User {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  wallets             Wallet[]
+  wallets              Wallet[]
   // Rows where this user is the one following.
-  following           Follow[]       @relation("following")
+  following            Follow[]               @relation("following")
   // Rows where this user is the one being followed.
-  followers           Follow[]       @relation("followers")
-  posts               Post[]
-  likes               Like[]
-  reposts             Repost[]
-  notifications       Notification[] @relation("received")
-  notificationsCaused Notification[] @relation("caused")
+  followers            Follow[]               @relation("followers")
+  posts                Post[]
+  likes                Like[]
+  reactions            Reaction[]
+  pendingLaunchDetails PendingLaunchDetails[]
+  reposts              Repost[]
+  notifications        Notification[]         @relation("received")
+  notificationsCaused  Notification[]         @relation("caused")
 
   @@map("users")
 }
@@ -54,6 +56,9 @@ model Post {
   text     String  @db.VarChar(280)
   imageUrl String? @map("image_url")
   parentId String? @map("parent_id") @db.Uuid
+  // Set when the post is a comment on a launch, or a reply in one of its
+  // conversations.
+  launchId String? @map("launch_id") @db.Uuid
 
   // Kept in step with replies, reposts and likes, in the same transaction as
   // each change.
@@ -73,9 +78,12 @@ model Post {
   reposts       Repost[]
   hashtags      PostHashtag[]
   notifications Notification[]
+  reactions     Reaction[]
+  launch        Launch?        @relation(fields: [launchId], references: [id], onDelete: SetNull)
 
   @@index([authorId, id])
   @@index([parentId, id])
+  @@index([launchId, id])
   @@map("posts")
 }
 
@@ -160,30 +168,108 @@ enum NotificationType {
   follow
   mention
   reply
+  // Someone bought the recipient's token
+  launch_purchase
+  // The recipient bought a token; there is no actor
+  purchase
+  // Someone commented on the recipient's launch
+  launch_comment
+  // Someone reacted with an emoji to the recipient's post or launch
+  reaction
+}
+
+/**
+ * The emoji reactions there are, a fixed set.
+ */
+enum ReactionKind {
+  rocket
+  fire
+  gem
+  eyes
+  joy
+  thumbs_down
 }
 
 // One row per thing `actor` did that `recipient` should hear about. Rows are
 // grouped when they are read ("Aria and 3 others liked your post"), and a row
 // is removed when what caused it is undone or its post is deleted.
 model Notification {
-  id          String           @id @default(uuid(7)) @db.Uuid
-  recipientId String           @map("recipient_id") @db.Uuid
-  actorId     String           @map("actor_id") @db.Uuid
-  type        NotificationType
-  // The post liked or reposted, or the post that mentions or replies.
-  // Null for a follow.
-  postId      String?          @map("post_id") @db.Uuid
-  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  readAt      DateTime?        @map("read_at") @db.Timestamptz(3)
+  id           String           @id @default(uuid(7)) @db.Uuid
+  recipientId  String           @map("recipient_id") @db.Uuid
+  // Who did it. Null for a purchase notified to its own buyer, and for a
+  // purchase made from a wallet with no Somewhere profile (see actorAddress).
+  actorId      String?          @map("actor_id") @db.Uuid
+  // The wallet that bought, when it belongs to no user.
+  actorAddress String?          @map("actor_address") @db.VarChar(42)
+  type         NotificationType
+  // The post liked, reposted or reacted to, or the post that mentions,
+  // replies or comments. Null for a follow and for a purchase.
+  postId       String?          @map("post_id") @db.Uuid
+  // The launch bought, commented on or reacted to.
+  launchId     String?          @map("launch_id") @db.Uuid
+  reaction     ReactionKind?
+  // For a purchase: what was paid, in wei, and the tokens it bought.
+  nativeAmount Decimal?         @map("native_amount") @db.Decimal(78, 0)
+  tokenAmount  Decimal?         @map("token_amount") @db.Decimal(78, 0)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  readAt       DateTime?        @map("read_at") @db.Timestamptz(3)
 
-  recipient User  @relation("received", fields: [recipientId], references: [id], onDelete: Cascade)
-  actor     User  @relation("caused", fields: [actorId], references: [id], onDelete: Cascade)
-  post      Post? @relation(fields: [postId], references: [id], onDelete: Cascade)
+  recipient User    @relation("received", fields: [recipientId], references: [id], onDelete: Cascade)
+  actor     User?   @relation("caused", fields: [actorId], references: [id], onDelete: Cascade)
+  post      Post?   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  launch    Launch? @relation(fields: [launchId], references: [id], onDelete: Cascade)
 
-  @@unique([recipientId, actorId, type, postId])
+  @@unique([recipientId, actorId, type, postId, launchId, reaction])
   @@index([recipientId, id])
   @@index([postId])
+  @@index([launchId])
   @@map("notifications")
+}
+
+/**
+ * An emoji reaction of a user to a post or to a launch, one of each kind.
+ */
+model Reaction {
+  id        String       @id @default(uuid(7)) @db.Uuid
+  userId    String       @map("user_id") @db.Uuid
+  kind      ReactionKind
+  // Exactly one of the two is set.
+  postId    String?      @map("post_id") @db.Uuid
+  launchId  String?      @map("launch_id") @db.Uuid
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  post   Post?   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  launch Launch? @relation(fields: [launchId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, postId, kind])
+  @@unique([userId, launchId, kind])
+  @@index([postId])
+  @@index([launchId])
+  @@map("reactions")
+}
+
+/**
+ * The description and image a creator sent for a launch the indexer has not
+ * read yet, by the transaction that creates it. Once the launch is indexed,
+ * the ones sent by the user who holds the creator's wallet are applied, and
+ * all of them are deleted.
+ */
+model PendingLaunchDetails {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  chainKey    String   @map("chain_key") @db.VarChar(32)
+  txHash      String   @map("tx_hash") @db.VarChar(66)
+  userId      String   @map("user_id") @db.Uuid
+  description String   @db.VarChar(280)
+  imageUrl    String?  @map("image_url")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Anyone can claim any transaction; only the user who holds the
+  // creator's wallet gets their details applied.
+  @@unique([chainKey, txHash, userId])
+  @@map("pending_launch_details")
 }
 
 // One row per sign-in attempt: the exact message the wallet has to sign.
@@ -263,10 +349,12 @@ model Launch {
   vestingReleasedNative Decimal @default(0) @map("vesting_released_native") @db.Decimal(78, 0)
   vestingReleasedTokens Decimal @default(0) @map("vesting_released_tokens") @db.Decimal(78, 0)
 
-  // Written by the creator through the API; not on chain. The image can be
-  // set once and never changed; it must be a file uploaded to this API.
-  description String  @default("") @db.VarChar(280)
-  imageUrl    String? @map("image_url")
+  // Written by the creator through the API; not on chain. Both are set
+  // together, once, before the sale starts, and never change; the image must
+  // be a file uploaded to this API.
+  description  String    @default("") @db.VarChar(280)
+  imageUrl     String?   @map("image_url")
+  detailsSetAt DateTime? @map("details_set_at") @db.Timestamptz(3)
 
   // Where and when the launch was created on chain.
   createdAt     DateTime @map("created_at") @db.Timestamptz(0)
@@ -274,6 +362,9 @@ model Launch {
   createdTxHash String   @map("created_tx_hash") @db.VarChar(66)
 
   contributions LaunchContribution[]
+  comments      Post[]
+  reactions     Reaction[]
+  notifications Notification[]
 
   @@unique([chainKey, launchId])
   @@index([chainKey, saleAddress])
@@ -328,6 +419,9 @@ model ChainEvent {
 // How far the indexer has read each chain.
 model ChainCursor {
   chainKey  String   @id @map("chain_key") @db.VarChar(32)
+  // The Launchpad contract that was read, in lowercase. If the configuration
+  // names another one, the indexer stops instead of mixing two contracts.
+  launchpad String?  @db.VarChar(42)
   // Last block fully processed.
   lastBlock Int      @map("last_block")
   lastHash  String   @map("last_hash") @db.VarChar(66)

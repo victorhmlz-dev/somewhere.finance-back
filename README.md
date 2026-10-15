@@ -50,6 +50,7 @@ src/feed/              Timelines, tendencias y sugerencias de a quién seguir
 src/notifications/     Notificaciones
 src/launchpad/         Lanzamientos de tokens: indexador de la cadena y rutas
 src/uploads/           Subida de imágenes y su descarga
+src/reactions/         Reacciones con emoji a posts y lanzamientos
 scripts/               Utilidades de desarrollo
 src/common/            Piezas compartidas, como la paginación
 src/health/            Comprobación de estado
@@ -84,12 +85,13 @@ El handle tiene de 3 a 15 caracteres (letras, números y guion bajo) y se guarda
 
 | Ruta | Sesión | Qué hace |
 |---|---|---|
-| `POST /api/posts` | Sí | Publica un post con `{ text, image, replyToId }`; con `replyToId` es una reply |
+| `POST /api/posts` | Sí | Publica un post con `{ text, image, replyToId, launchId }`; con `replyToId` es una reply y con `launchId`, un comentario sobre ese lanzamiento |
 | `GET /api/posts/:id` | Opcional | Devuelve el post |
 | `DELETE /api/posts/:id` | Sí | Lo borra; solo puede su autor |
 | `GET /api/posts/:id/replies` | Opcional | Sus replies, de la más antigua a la más reciente |
 | `PUT /api/posts/:id/like` y `DELETE` | Sí | Da o quita el like y devuelve el post |
 | `PUT /api/posts/:id/repost` y `DELETE` | Sí | Hace o deshace el repost y devuelve el post |
+| `PUT /api/posts/:id/reactions/:kind` y `DELETE` | Sí | Pone o quita una reacción con emoji y devuelve el post |
 
 Un post tiene esta forma:
 
@@ -101,9 +103,11 @@ Un post tiene esta forma:
   "image": null,
   "createdAt": "2026-10-11T00:00:00.000Z",
   "replyTo": null,
+  "launch": null,
   "stats": { "replies": 0, "reposts": 0, "likes": 0, "views": 0 },
   "isLiked": false,
-  "isReposted": false
+  "isReposted": false,
+  "reactions": [{ "kind": "rocket", "count": 0, "reacted": false }, "…"]
 }
 ```
 
@@ -112,6 +116,9 @@ Un post tiene esta forma:
 - `isLiked` e `isReposted` se refieren al usuario de la sesión; sin sesión son `false`.
 - Cada vez que un post se sirve, solo o dentro de una lista, suma una view.
 - Dar like o hacer repost dos veces no cambia nada; quitarlo dos veces, tampoco.
+- `launch` es `{ id, name, symbol, image }` cuando el post comenta un lanzamiento. Las replies a un comentario heredan su lanzamiento; por eso una reply no puede llevar `launchId`. El creador del lanzamiento recibe una notificación por cada comentario y cada reply, salvo que ya la reciba como reply a su post o como mención.
+- Los comentarios son posts normales: salen en el perfil de su autor y en los feeds de sus seguidores.
+- `reactions` lista las seis reacciones (`rocket`, `fire`, `gem`, `eyes`, `joy`, `thumbs_down`) con cuántos la usaron y si el usuario de la sesión es uno de ellos. Un usuario puede usar varias en el mismo post, cada una una vez.
 - Un post borrado responde 404 y desaparece de todas las listas. Su texto y su imagen se eliminan de la base de datos, pero la fila se conserva para que sus replies sigan indicando a qué respondían.
 
 ## Timelines
@@ -163,17 +170,25 @@ Una notificación tiene esta forma:
   "type": "like",
   "actors": [{ "id": "…", "name": "…", "handle": "…", "avatar": null, "verified": false, "bio": "" }],
   "otherActorCount": 12,
+  "actorAddress": null,
   "post": { "…": "un post, como arriba" },
+  "launch": null,
+  "reaction": null,
+  "purchase": null,
   "createdAt": "2026-10-11T00:00:00.000Z",
   "isUnread": true
 }
 ```
 
-- `type` es `like`, `repost`, `follow`, `mention` o `reply`.
+- `type` es `like`, `repost`, `follow`, `mention`, `reply`, `launch_purchase` (alguien compró tu token), `purchase` (compraste un token), `launch_comment` (alguien comentó tu lanzamiento) o `reaction` (alguien reaccionó a tu post o a tu lanzamiento).
+- `launch` es `{ id, name, symbol, image, nativeSymbol }` en las notificaciones de compras, comentarios y reacciones a un lanzamiento. `reaction` es el emoji de una `reaction`.
+- `purchase` es `{ nativeAmount, tokenAmount }` (en la unidad mínima) para una sola compra. Las compras de un mismo día a un lanzamiento se agrupan como los likes y entonces no llevan importes.
+- Una compra hecha desde una wallet sin perfil de Somewhere no tiene `actors`: trae la dirección en `actorAddress`. Una `purchase` tampoco tiene `actors`: la hizo quien la recibe.
+- Las compras se notifican con la fecha de su bloque, no con la de cuando el indexador las leyó.
 - `actors` trae hasta tres usuarios, del más reciente al más antiguo, y `otherActorCount` cuántos más hay: "Aria, Yuki y 12 más".
 - `post` es el post que recibió el like o el repost, o el post que menciona o responde. En un `follow` es `null`.
 - Los likes y los reposts que un post recibe en un mismo día (UTC) forman una sola notificación, y lo mismo los follows de un día. Las menciones y las replies van siempre sueltas.
-- La pestaña `verified` solo cuenta lo que hicieron usuarios verificados; `mentions` incluye menciones y replies.
+- La pestaña `verified` solo cuenta lo que hicieron usuarios verificados; `mentions` incluye menciones, replies y comentarios a tus lanzamientos.
 - Nadie recibe notificaciones de lo que se hace a sí mismo. Una reply que además menciona al autor del post genera una sola notificación, de tipo `reply`.
 - Al deshacer lo que causó una notificación (quitar el like, dejar de seguir, borrar el post), la notificación desaparece.
 - Una mención es `@` seguido de un handle; no distingue mayúsculas.
@@ -188,7 +203,10 @@ Los lanzamientos de tokens viven en los contratos de `somewhere.finance-contract
 | `GET /api/launches/chains` | No | Cadenas configuradas, con la dirección del contrato `Launchpad` de cada una |
 | `GET /api/launches/token-list` | No | Los tokens de todos los lanzamientos listados, en el formato de lista de tokens que importan wallets y exchanges |
 | `GET /api/launches/:id` | Opcional | Un lanzamiento |
-| `PATCH /api/launches/:id` | Sí | Cambia la descripción y pone la imagen; solo el usuario dueño de la wallet que lo creó |
+| `POST /api/launches/details` | Sí | Manda la descripción y la imagen con el hash de la transacción que crea el lanzamiento, antes de que el indexador lo lea |
+| `PUT /api/launches/:id/details` | Sí | Pone la descripción y la imagen de un lanzamiento ya indexado |
+| `GET /api/launches/:id/comments` | Opcional | Los comentarios que abren conversación, del más reciente al más antiguo; las replies se leen con `GET /api/posts/:id/replies` |
+| `PUT /api/launches/:id/reactions/:kind` y `DELETE` | Sí | Pone o quita una reacción con emoji y devuelve el lanzamiento |
 
 Filtros de la lista: `chain` (clave de la cadena), `status` (`upcoming`, `live` o `ended`), `creator` (dirección de wallet) y `q` (texto en el nombre o el símbolo).
 
@@ -200,7 +218,9 @@ Sobre la respuesta:
 - `finalizeBy` indica hasta cuándo se puede listar una venta exitosa. Pasado ese plazo de 7 días la venta pasa a fallida.
 - `myContribution` es lo que aportó el usuario de la sesión con sus wallets, y si ya retiró tokens o reembolso.
 - `creator.user` es el perfil de Somewhere del creador, si su wallet pertenece a algún usuario.
-- La descripción y la imagen son lo único que no está en la cadena. La descripción se puede cambiar siempre. **La imagen se pone una sola vez y no cambia nunca**, y tiene que ser una subida a esta API (`POST /api/uploads/images`): cualquier otro enlace se rechaza con 400 y un segundo cambio con 409. Así nadie puede cambiar el logo de un token para hacerse pasar por otro.
+- La descripción y la imagen son lo único que no está en la cadena. **Se ponen juntas, una sola vez, solo por el creador y solo antes de que empiece la venta**, y después no cambian nunca: así nadie puede cambiar el logo de un token para hacerse pasar por otro. La imagen tiene que ser una subida a esta API (`POST /api/uploads/images`); cualquier otro enlace se rechaza con 400. Un segundo intento, o uno con la venta empezada, se rechaza con 409. `detailsSetAt` dice cuándo se pusieron.
+- El front las manda con `POST /api/launches/details` en cuanto se confirma la transacción. Si el lanzamiento aún no está indexado, la API responde 202 y las guarda aparte; el indexador las aplica al leerlo, solo si la wallet creadora es de quien las mandó. Cualquiera puede mandar detalles para cualquier transacción, pero solo se aplican los del creador, así que nadie puede adelantarse para bloquearlo. Los que no llegan a aplicarse se borran a las 24 horas.
+- `reactions` lista las reacciones al lanzamiento, igual que en los posts.
 
 ### Lista de tokens
 
@@ -232,6 +252,7 @@ Sobre la respuesta:
 - `confirmations` es cuántos bloques espera el indexador antes de leer uno. Lo que el indexador lee no lo deshace, así que en una red real tiene que ser lo bastante alto para que el bloque ya no pueda cambiar. Solo una cadena local admite `0`.
 - `logBlockRange` es cuántos bloques pide el indexador al nodo de una vez (por defecto 2000). Los planes gratuitos de los proveedores lo limitan: en Alchemy gratis, a 10.
 - Si una cadena reemplaza un bloque ya leído, el indexador se detiene y lo dice en el log.
+- El indexador recuerda qué contrato `Launchpad` leyó. Si `EVM_CHAINS` pasa a nombrar otro para la misma cadena, se detiene y pide `npm run launchpad:reset -- <cadena>`, en vez de mezclar los datos de dos contratos.
 - Los errores del indexador no muestran la URL del nodo, porque suele llevar la API key del proveedor.
 
 ### Desarrollo con una cadena local

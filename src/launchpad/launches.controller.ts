@@ -1,21 +1,32 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
-  Patch,
+  Post,
+  Put,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   AuthGuard,
   OptionalAuthGuard,
   type AuthenticatedUser,
 } from '../auth/auth.guard.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { PaginationQueryDto } from '../common/pagination.js';
+import type { ReactionKind } from '../generated/prisma/enums.js';
+import { PostsService } from '../posts/posts.service.js';
+import { ParseReactionKindPipe } from '../reactions/reaction-kind.pipe.js';
+import {
+  LaunchDetailsDto,
+  PendingLaunchDetailsDto,
+} from './dto/launch-details.dto.js';
 import { ListLaunchesQueryDto } from './dto/list-launches-query.dto.js';
-import { UpdateLaunchDto } from './dto/update-launch.dto.js';
 import { LaunchesService } from './launches.service.js';
 
 /**
@@ -25,7 +36,10 @@ import { LaunchesService } from './launches.service.js';
  */
 @Controller('launches')
 export class LaunchesController {
-  constructor(private readonly launches: LaunchesService) {}
+  constructor(
+    private readonly launches: LaunchesService,
+    private readonly posts: PostsService,
+  ) {}
 
   @Get()
   @UseGuards(OptionalAuthGuard)
@@ -51,6 +65,23 @@ export class LaunchesController {
     return this.launches.tokenList();
   }
 
+  /**
+   * The description and image of a launch, sent right after the transaction
+   * that creates it. 200 with the launch if it is indexed already; 202 with
+   * null if they wait for the indexer.
+   */
+  @Post('details')
+  @UseGuards(AuthGuard)
+  async sendDetails(
+    @CurrentUser() currentUser: AuthenticatedUser,
+    @Body() dto: PendingLaunchDetailsDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const launch = await this.launches.sendDetails(currentUser.id, dto);
+    res.status(launch ? 200 : 202);
+    return { launch };
+  }
+
   @Get(':id')
   @UseGuards(OptionalAuthGuard)
   get(
@@ -60,14 +91,47 @@ export class LaunchesController {
     return this.launches.get(id, viewer?.id);
   }
 
-  /** Sets the description, and the image once. Neither is on chain. */
-  @Patch(':id')
+  /** Sets the description and image: once, by the creator, before the start. */
+  @Put(':id/details')
   @UseGuards(AuthGuard)
-  update(
+  setDetails(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() currentUser: AuthenticatedUser,
-    @Body() dto: UpdateLaunchDto,
+    @Body() dto: LaunchDetailsDto,
   ) {
-    return this.launches.update(id, currentUser.id, dto);
+    return this.launches.setDetails(id, currentUser.id, dto);
+  }
+
+  /** Comments on the launch, newest first. Posting one is `POST /posts`. */
+  @Get(':id/comments')
+  @UseGuards(OptionalAuthGuard)
+  async listComments(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: PaginationQueryDto,
+    @CurrentUser() viewer?: AuthenticatedUser,
+  ) {
+    await this.launches.assertExists(id);
+    return this.posts.listLaunchComments(id, query, viewer?.id);
+  }
+
+  /** Reacts with an emoji: rocket, fire, gem, eyes, joy or thumbs_down. */
+  @Put(':id/reactions/:kind')
+  @UseGuards(AuthGuard)
+  react(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('kind', ParseReactionKindPipe) kind: ReactionKind,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.launches.setReaction(id, currentUser.id, kind, true);
+  }
+
+  @Delete(':id/reactions/:kind')
+  @UseGuards(AuthGuard)
+  unreact(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('kind', ParseReactionKindPipe) kind: ReactionKind,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.launches.setReaction(id, currentUser.id, kind, false);
   }
 }

@@ -18,6 +18,8 @@ import {
 } from '../auth/auth.guard.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { PaginationQueryDto } from '../common/pagination.js';
+import type { ReactionKind } from '../generated/prisma/enums.js';
+import { ParseReactionKindPipe } from '../reactions/reaction-kind.pipe.js';
 import { CreatePostDto } from './dto/create-post.dto.js';
 import { PostsService } from './posts.service.js';
 
@@ -99,5 +101,26 @@ export class PostsController {
     @CurrentUser() currentUser: AuthenticatedUser,
   ) {
     return this.posts.unrepost(currentUser.id, id);
+  }
+
+  /** Reacts with an emoji: rocket, fire, gem, eyes, joy or thumbs_down. */
+  @Put(':id/reactions/:kind')
+  @UseGuards(AuthGuard)
+  react(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('kind', ParseReactionKindPipe) kind: ReactionKind,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.posts.setReaction(currentUser.id, id, kind, true);
+  }
+
+  @Delete(':id/reactions/:kind')
+  @UseGuards(AuthGuard)
+  unreact(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('kind', ParseReactionKindPipe) kind: ReactionKind,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.posts.setReaction(currentUser.id, id, kind, false);
   }
 }

@@ -135,12 +135,16 @@ describe('Notifications (e2e)', () => {
         },
       ],
       otherActorCount: 0,
+      actorAddress: null,
       post: expect.objectContaining({
         id: post.id,
         text: 'Just listed three new pieces.',
         // Reading notifications does not count as viewing the post.
         stats: { replies: 1, reposts: 1, likes: 1, views: 0 },
       }),
+      launch: null,
+      reaction: null,
+      purchase: null,
       createdAt: expect.any(String),
       isUnread: true,
     });
