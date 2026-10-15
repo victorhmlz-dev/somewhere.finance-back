@@ -9,7 +9,11 @@ import { ConfigService } from '@nestjs/config';
 import { BaseError, type Hex } from 'viem';
 import type { Env } from '../config/env.js';
 import { AssetsService } from '../assets/assets.service.js';
-import { hasLaunchpad, type LaunchpadChainConfig } from '../config/chains.js';
+import {
+  hasLaunchpad,
+  type LaunchpadChainConfig,
+  type LaunchpadConfig,
+} from '../config/chains.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   CHAIN_READER_FACTORY,
@@ -21,6 +25,7 @@ import { applyPendingDetails } from './launch-details.js';
 import {
   applyLog,
   newLaunchAddresses,
+  quoteAssetOf,
   type LogSource,
 } from './launch-events.js';
 
@@ -53,9 +58,11 @@ function describeError(error: unknown, chain: LaunchpadChainConfig): string {
 
 /**
  * Copies what happens in the launchpad contracts into the database: it reads
- * their events block by block and applies them in order. Each batch of blocks
- * is saved in one transaction together with the position reached, so a crash
- * never leaves a block half applied nor applies it twice.
+ * their events block by block and applies them in order. Each Launchpad of a
+ * chain (a v2 and a v3, say) is read on its own, from its own start block,
+ * with its own position. Each batch of blocks is saved in one transaction
+ * together with the position reached, so a crash never leaves a block half
+ * applied nor applies it twice.
  *
  * It only reads blocks that are `confirmations` deep, because what it has
  * read it never unreads. If the chain still replaces a block it had read, it
@@ -68,6 +75,8 @@ export class LaunchIndexerService
 {
   private readonly logger = new Logger(LaunchIndexerService.name);
   private readonly timers = new Map<string, NodeJS.Timeout>();
+  /** The wrapped native currency of each v3 Launchpad, read once. */
+  private readonly wrappedNative = new Map<string, string>();
   private stopped = false;
 
   constructor(
@@ -84,7 +93,10 @@ export class LaunchIndexerService
       .get('CHAINS', { infer: true })
       .filter(hasLaunchpad);
     for (const chain of chains) {
-      this.logger.log(`Indexing the launchpad of ${chain.key}`);
+      const list = chain.launchpads
+        .map((launchpad) => `${launchpad.address} (v${launchpad.version})`)
+        .join(', ');
+      this.logger.log(`Indexing ${chain.key}: ${list}`);
       this.poll(chain, this.createReader(chain));
     }
   }
@@ -94,26 +106,40 @@ export class LaunchIndexerService
     for (const timer of this.timers.values()) clearTimeout(timer);
   }
 
-  /** Reads everything new on one chain. Returns how many blocks it read. */
+  /**
+   * Reads everything new on one chain, Launchpad by Launchpad. Returns how
+   * many blocks it read, adding up every Launchpad.
+   */
   async sync(
     chain: LaunchpadChainConfig,
     reader: ChainReader,
   ): Promise<number> {
-    const cursor = await this.prisma.chainCursor.findUnique({
-      where: { chainKey: chain.key },
-    });
-    // A new Launchpad on the same chain is read from its own start block.
-    // Nothing is deleted: the launches of the previous one stay in the
-    // database, out of sight, with everything people added to them.
-    const sameContract =
-      !cursor?.launchpad || cursor.launchpad === chain.launchpad;
-    if (cursor && !sameContract) {
-      this.logger.log(
-        `${chain.key}: the Launchpad is now ${chain.launchpad}; reading it ` +
-          `from block ${chain.startBlock}`,
-      );
+    let blocks = 0;
+    for (const launchpad of chain.launchpads) {
+      if (this.stopped) break;
+      blocks += await this.syncLaunchpad(chain, launchpad, reader);
     }
-    if (cursor && sameContract) {
+    await this.settlePendingDetails(chain);
+    return blocks;
+  }
+
+  private async syncLaunchpad(
+    chain: LaunchpadChainConfig,
+    launchpad: LaunchpadConfig,
+    reader: ChainReader,
+  ): Promise<number> {
+    // A Launchpad added to the configuration has no position yet and is read
+    // from its own start block. One taken out keeps its launches in the
+    // database, out of sight, with everything people added to them.
+    const cursor = await this.prisma.chainCursor.findUnique({
+      where: {
+        chainKey_launchpad: {
+          chainKey: chain.key,
+          launchpad: launchpad.address,
+        },
+      },
+    });
+    if (cursor) {
       const block = await reader.getBlock(cursor.lastBlock).catch(() => null);
       if (!block) {
         // Typical of a local chain that was restarted.
@@ -132,18 +158,15 @@ export class LaunchIndexerService
 
     const target =
       (await reader.getBlockNumber()) - BigInt(chain.confirmations);
-    let from = BigInt(
-      cursor && sameContract ? cursor.lastBlock + 1n : chain.startBlock,
-    );
+    let from = cursor ? cursor.lastBlock + 1n : BigInt(launchpad.startBlock);
     const first = from;
 
     while (from <= target && !this.stopped) {
       const candidate = from + BigInt(chain.logBlockRange) - 1n;
       const to = candidate < target ? candidate : target;
-      await this.indexRange(chain, reader, from, to);
+      await this.indexRange(chain, launchpad, reader, from, to);
       from = to + 1n;
     }
-    await this.settlePendingDetails(chain);
     return Number(from - first);
   }
 
@@ -169,7 +192,7 @@ export class LaunchIndexerService
     const launches = await this.prisma.launch.findMany({
       where: {
         chainKey: chain.key,
-        launchpad: chain.launchpad,
+        launchpad: { in: chain.launchpads.map((item) => item.address) },
         createdTxHash: { in: pending.map((row) => row.txHash) },
       },
     });
@@ -182,24 +205,26 @@ export class LaunchIndexerService
 
   private async indexRange(
     chain: LaunchpadChainConfig,
+    launchpad: LaunchpadConfig,
     reader: ChainReader,
     fromBlock: bigint,
     toBlock: bigint,
   ): Promise<void> {
     const range = { fromBlock, toBlock };
+    const { address: launchpadAddress, version } = launchpad;
 
     const launchpadLogs = await reader.getLogs({
-      addresses: [chain.launchpad],
+      addresses: [launchpadAddress],
       ...range,
     });
 
     // Sales and vestings to listen to: the known ones, plus the ones created
     // in these very blocks, which can already have events of their own.
     const sources = new Map<string, LogSource>([
-      [chain.launchpad, 'launchpad'],
+      [launchpadAddress, 'launchpad'],
     ]);
     const known = await this.prisma.launch.findMany({
-      where: { chainKey: chain.key, launchpad: chain.launchpad },
+      where: { chainKey: chain.key, launchpad: launchpadAddress },
       select: { saleAddress: true, vestingAddress: true },
     });
     for (const launch of known) {
@@ -207,14 +232,14 @@ export class LaunchIndexerService
       sources.set(launch.vestingAddress, 'vesting');
     }
     for (const log of launchpadLogs) {
-      const created = newLaunchAddresses(log);
+      const created = newLaunchAddresses(log, version);
       if (!created) continue;
       sources.set(created.sale, 'sale');
       sources.set(created.vesting, 'vesting');
     }
 
     const launchAddresses = [...sources.keys()].filter(
-      (address) => address !== chain.launchpad,
+      (address) => address !== launchpadAddress,
     ) as Hex[];
     const launchLogs: ChainLog[] = [];
     for (let i = 0; i < launchAddresses.length; i += ADDRESSES_PER_REQUEST) {
@@ -236,6 +261,13 @@ export class LaunchIndexerService
     }
 
     const nativeAsset = await this.assets.nativeOf(chain.key);
+    const assetIds = await this.registerQuoteAssets(
+      chain,
+      launchpad,
+      reader,
+      launchpadLogs,
+      nativeAsset.id,
+    );
     await this.prisma.$transaction(
       async (tx) => {
         for (const log of logs) {
@@ -246,9 +278,10 @@ export class LaunchIndexerService
             tx,
             {
               chainKey: chain.key,
-              launchpad: chain.launchpad,
-              // The v2 Launchpad sells every token for the chain's currency
-              quoteAssetId: nativeAsset.id,
+              launchpad: launchpadAddress,
+              version,
+              nativeAssetId: nativeAsset.id,
+              assetIds,
               source,
               blockHash: block.hash,
               blockTime: block.time,
@@ -257,19 +290,62 @@ export class LaunchIndexerService
           );
         }
 
+        const key = { chainKey: chain.key, launchpad: launchpadAddress };
         const position = {
-          launchpad: chain.launchpad,
           lastBlock: toBlock,
           lastHash: blocks.get(toBlock)!.hash,
         };
         await tx.chainCursor.upsert({
-          where: { chainKey: chain.key },
-          create: { chainKey: chain.key, ...position },
+          where: { chainKey_launchpad: key },
+          create: { ...key, ...position },
           update: position,
         });
       },
       { timeout: 60_000 },
     );
+  }
+
+  /**
+   * Registers the tokens the logs of a v3 Launchpad pair launches with,
+   * before the logs are applied: reading a token is a call to the node,
+   * which does not belong inside the database transaction. Returns the asset
+   * of each, by address; the wrapped native currency is the native asset.
+   */
+  private async registerQuoteAssets(
+    chain: LaunchpadChainConfig,
+    launchpad: LaunchpadConfig,
+    reader: ChainReader,
+    logs: ChainLog[],
+    nativeAssetId: string,
+  ): Promise<Map<string, string>> {
+    const assetIds = new Map<string, string>();
+    const tokens = new Set(
+      logs
+        .map((log) => quoteAssetOf(log, launchpad.version))
+        .filter((token): token is string => token !== null),
+    );
+    if (tokens.size === 0) return assetIds;
+
+    const cacheKey = `${chain.key}:${launchpad.address}`;
+    let wrapped = this.wrappedNative.get(cacheKey);
+    if (!wrapped) {
+      wrapped = (
+        await reader.getWrappedNative(launchpad.address)
+      ).toLowerCase();
+      this.wrappedNative.set(cacheKey, wrapped);
+    }
+
+    for (const token of tokens) {
+      if (token === wrapped) {
+        assetIds.set(token, nativeAssetId);
+        continue;
+      }
+      const asset = await this.assets.ensureToken(chain, token, () =>
+        reader.getTokenMetadata(token as Hex),
+      );
+      assetIds.set(token, asset.id);
+    }
+    return assetIds;
   }
 
   /** Syncs now and again after every pause, for as long as the app runs. */

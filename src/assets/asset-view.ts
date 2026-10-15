@@ -15,6 +15,8 @@ export interface AssetView {
   kind: AssetKind;
   /** Who issues it, for stocks and other real-world assets. */
   issuer: string | null;
+  /** Whether the issuer can freeze, pause or take balances of it. */
+  canFreeze: boolean;
 }
 
 /** How the address column marks a chain's own currency. */
@@ -29,5 +31,6 @@ export function toAssetView(asset: Asset): AssetView {
     decimals: asset.decimals,
     kind: asset.kind,
     issuer: asset.issuer,
+    canFreeze: asset.canFreeze,
   };
 }

@@ -25,14 +25,53 @@ interface BaseChainConfig {
   rpcUrl: string;
 }
 
-/** An EVM chain, with the Launchpad contract to read, if it has one. */
+/** Versions of the Launchpad contract the API can read. */
+export const LAUNCHPAD_VERSIONS = [2, 3] as const;
+export type LaunchpadVersion = (typeof LAUNCHPAD_VERSIONS)[number];
+
+/** One deployed Launchpad contract. */
+export interface LaunchpadConfig {
+  /** In lowercase. */
+  address: `0x${string}`;
+  /** 2 sells for the chain's currency; 3 for any asset it allows. */
+  version: LaunchpadVersion;
+  /** Block it was deployed in; the indexer starts there. */
+  startBlock: number;
+}
+
+/** Kinds an asset can be labelled with; "native" is the chain's own currency. */
+export const LABELLED_ASSET_KINDS = [
+  'crypto',
+  'stablecoin',
+  'stock',
+  'rwa',
+] as const;
+
+/**
+ * What the chain cannot say about a token: whether it is a stablecoin, a
+ * stock or another real-world asset, who issues it, and whether the issuer
+ * can freeze or take balances. Symbol, name and decimals are read from the
+ * token itself.
+ */
+export interface AssetLabel {
+  /** In lowercase. */
+  address: `0x${string}`;
+  kind: (typeof LABELLED_ASSET_KINDS)[number];
+  issuer: string | null;
+  canFreeze: boolean;
+}
+
+/** An EVM chain, with the Launchpad contracts to read, if it has any. */
 export interface EvmChainConfig extends BaseChainConfig {
   family: 'evm';
   chainId: number;
-  /** Address of the Launchpad contract, in lowercase. Null if none. */
-  launchpad: `0x${string}` | null;
-  /** Block the Launchpad was deployed in; the indexer starts there. */
-  startBlock: number;
+  /**
+   * Every Launchpad whose launches are shown, oldest first. New launches are
+   * created on the last one. Empty if the chain has none.
+   */
+  launchpads: LaunchpadConfig[];
+  /** Labels for the tokens launches can be paired with. */
+  assets: AssetLabel[];
   /**
    * Blocks to wait before reading one. A block that recent can still be
    * replaced by the chain, and what the indexer has read it never unreads.
@@ -54,15 +93,18 @@ export interface SolanaChainConfig extends BaseChainConfig {
 
 export type ChainConfig = EvmChainConfig | SolanaChainConfig;
 
-/** An EVM chain with a Launchpad: what the indexer reads. */
-export type LaunchpadChainConfig = EvmChainConfig & {
-  launchpad: `0x${string}`;
-};
+/** An EVM chain with at least one Launchpad: what the indexer reads. */
+export type LaunchpadChainConfig = EvmChainConfig;
 
 export function hasLaunchpad(
   chain: ChainConfig,
 ): chain is LaunchpadChainConfig {
-  return chain.family === 'evm' && chain.launchpad !== null;
+  return chain.family === 'evm' && chain.launchpads.length > 0;
+}
+
+/** The Launchpad new launches are created on: the last one listed. */
+export function currentLaunchpad(chain: ChainConfig): LaunchpadConfig | null {
+  return chain.family === 'evm' ? (chain.launchpads.at(-1) ?? null) : null;
 }
 
 const KEY_PATTERN = /^[a-z0-9-]{1,32}$/;
@@ -72,7 +114,92 @@ const SOLANA_CLUSTERS = ['mainnet-beta', 'devnet', 'testnet'];
 const isCount = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0;
 
+const isAddress = (value: unknown): value is string =>
+  typeof value === 'string' && ADDRESS_PATTERN.test(value);
+
+const lowerAddress = (value: string) => value.toLowerCase() as `0x${string}`;
+
 type Entry = Record<string, unknown>;
+
+/**
+ * `launchpads`, or the older single `launchpad` with `startBlock`, which is
+ * read as a version 2 Launchpad.
+ */
+function parseLaunchpads(
+  entry: Entry,
+  fail: (problem: string) => never,
+): LaunchpadConfig[] {
+  if (entry.launchpads !== undefined && entry.launchpad !== undefined) {
+    fail('set launchpads or launchpad, not both');
+  }
+  const raw =
+    entry.launchpads ??
+    (entry.launchpad === undefined
+      ? []
+      : [
+          {
+            address: entry.launchpad,
+            version: 2,
+            startBlock: entry.startBlock,
+          },
+        ]);
+  if (!Array.isArray(raw)) fail('launchpads must be a list');
+
+  const launchpads = (raw as Entry[]).map((item, index) => {
+    const where = `launchpads[${index}]`;
+    if (typeof item !== 'object' || item === null)
+      fail(`${where} must be an object`);
+    if (!isAddress(item.address))
+      fail(`${where}.address must be a contract address`);
+    if (!LAUNCHPAD_VERSIONS.includes(item.version as LaunchpadVersion)) {
+      fail(`${where}.version must be one of: ${LAUNCHPAD_VERSIONS.join(', ')}`);
+    }
+    const startBlock = item.startBlock ?? 0;
+    if (!isCount(startBlock))
+      fail(`${where}.startBlock must be a block number`);
+    return {
+      address: lowerAddress(item.address as string),
+      version: item.version as LaunchpadVersion,
+      startBlock: startBlock as number,
+    };
+  });
+  const addresses = new Set(launchpads.map((launchpad) => launchpad.address));
+  if (addresses.size !== launchpads.length) {
+    fail('every launchpad needs a different address');
+  }
+  return launchpads;
+}
+
+function parseAssetLabels(
+  entry: Entry,
+  fail: (problem: string) => never,
+): AssetLabel[] {
+  const raw = entry.assets ?? [];
+  if (!Array.isArray(raw)) fail('assets must be a list');
+  return (raw as Entry[]).map((item, index) => {
+    const where = `assets[${index}]`;
+    if (typeof item !== 'object' || item === null)
+      fail(`${where} must be an object`);
+    if (!isAddress(item.address))
+      fail(`${where}.address must be a token address`);
+    const kind = item.kind ?? 'crypto';
+    if (!LABELLED_ASSET_KINDS.includes(kind as AssetLabel['kind'])) {
+      fail(`${where}.kind must be one of: ${LABELLED_ASSET_KINDS.join(', ')}`);
+    }
+    if (item.issuer !== undefined && typeof item.issuer !== 'string') {
+      fail(`${where}.issuer must be text`);
+    }
+    if (item.canFreeze !== undefined && typeof item.canFreeze !== 'boolean') {
+      fail(`${where}.canFreeze must be true or false`);
+    }
+    return {
+      address: lowerAddress(item.address as string),
+      kind: kind as AssetLabel['kind'],
+      issuer: (item.issuer as string | undefined) || null,
+      canFreeze: item.canFreeze === true,
+    };
+  });
+}
 
 function parseNativeCurrency(
   entry: Entry,
@@ -131,22 +258,14 @@ function parseChain(entry: Entry, index: number): ChainConfig {
     if (typeof cluster !== 'string' || !SOLANA_CLUSTERS.includes(cluster)) {
       fail(`cluster must be one of: ${SOLANA_CLUSTERS.join(', ')}`);
     }
-    if (entry.launchpad !== undefined) {
+    if (entry.launchpad !== undefined || entry.launchpads !== undefined) {
       fail('launchpads on Solana are not read yet');
     }
     return { ...base, family: 'solana', cluster: cluster as string };
   }
 
-  const { chainId, launchpad } = entry;
+  const { chainId } = entry;
   if (!isCount(chainId) || chainId === 0) fail('chainId must be a number');
-  if (
-    launchpad !== undefined &&
-    (typeof launchpad !== 'string' || !ADDRESS_PATTERN.test(launchpad))
-  ) {
-    fail('launchpad must be a contract address');
-  }
-  const startBlock = entry.startBlock ?? 0;
-  if (!isCount(startBlock)) fail('startBlock must be a block number');
   const confirmations = entry.confirmations ?? 0;
   if (!isCount(confirmations)) fail('confirmations must be a number');
   const logBlockRange = entry.logBlockRange ?? 2000;
@@ -158,10 +277,8 @@ function parseChain(entry: Entry, index: number): ChainConfig {
     ...base,
     family: 'evm',
     chainId: chainId as number,
-    launchpad: launchpad
-      ? ((launchpad as string).toLowerCase() as `0x${string}`)
-      : null,
-    startBlock: startBlock as number,
+    launchpads: parseLaunchpads(entry, fail),
+    assets: parseAssetLabels(entry, fail),
     confirmations: confirmations as number,
     logBlockRange: logBlockRange as number,
   };

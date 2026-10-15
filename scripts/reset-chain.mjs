@@ -5,8 +5,8 @@
 //
 //   npm run launchpad:reset -- local
 //
-// It only deletes copies of chain data: launches, contributions, events and
-// the indexer position of that chain. What people added about the launches
+// It only deletes copies of chain data: launches, contributions, events, the
+// assets each Launchpad allows and the indexer positions of that chain. What people added about the launches
 // (descriptions and images, comments, reactions, notifications) is kept: a
 // launch read again gets the same id, so all of it finds its launch again.
 //
@@ -78,6 +78,11 @@ try {
   await client.query('DELETE FROM chain_cursors WHERE chain_key = $1', [
     chainKey,
   ]);
+  // Which assets each v3 Launchpad allows: read again from its events too
+  await client.query(
+    'DELETE FROM launchpad_quote_assets WHERE chain_key = $1',
+    [chainKey],
+  );
   await client.query('COMMIT');
   console.log(
     `Chain "${chainKey}": removed ${launches.rowCount} launches and ${events.rowCount} events.`,

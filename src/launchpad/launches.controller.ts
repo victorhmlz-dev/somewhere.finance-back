@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -64,6 +65,23 @@ export class LaunchesController {
   @Get('token-list')
   tokenList() {
     return this.launches.tokenList();
+  }
+
+  /**
+   * The launches on any chain that already use a ticker and still count (not
+   * cancelled, not failed), to warn before creating another one. The
+   * contract of each chain only refuses a ticker taken on that chain.
+   */
+  @Get('tickers/:symbol')
+  tickerUses(@Param('symbol') symbol: string) {
+    // The same rule as the v3 Launchpad: 1 to 10 of A-Z and 0-9
+    const ticker = symbol.toUpperCase();
+    if (!/^[A-Z0-9]{1,10}$/.test(ticker)) {
+      throw new BadRequestException(
+        'A ticker is 1 to 10 letters A-Z or digits',
+      );
+    }
+    return this.launches.tickerUses(ticker);
   }
 
   /**

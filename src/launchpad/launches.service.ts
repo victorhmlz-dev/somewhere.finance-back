@@ -10,9 +10,13 @@ import { ReactionsService } from '../reactions/reactions.service.js';
 import { ConfigService } from '@nestjs/config';
 import { type Page, pageArgs } from '../common/pagination.js';
 import type { Env } from '../config/env.js';
-import { type AssetView, toAssetView } from '../assets/asset-view.js';
+import { toAssetView } from '../assets/asset-view.js';
 import { AssetsService } from '../assets/assets.service.js';
-import { hasLaunchpad, type LaunchpadChainConfig } from '../config/chains.js';
+import {
+  currentLaunchpad,
+  hasLaunchpad,
+  type LaunchpadChainConfig,
+} from '../config/chains.js';
 import type {
   LaunchContribution,
   LaunchProfile,
@@ -36,11 +40,13 @@ import {
   evmWalletsOf,
   type LaunchDetails,
 } from './launch-details.js';
+import { launchStatus, type LaunchStatus } from './launch-status.js';
 import {
   type ChainView,
   LAUNCH_INCLUDE,
   type LaunchRow,
   type LaunchView,
+  type QuoteAssetOption,
   toChainView,
   toLaunchView,
 } from './launch-view.js';
@@ -70,6 +76,24 @@ function statusCondition(
 }
 
 /** The answer for each reason the details of a launch were not set. */
+/**
+ * `Launchpad.MIN_SOFT_CAP` of the v2 contract: 0.01 of the chain's currency,
+ * in its smallest unit with 18 decimals.
+ */
+const V2_MIN_SOFT_CAP = '10000000000000000';
+
+/** Stablecoins first: the dollar is Somewhere's suggested pair. */
+const KIND_ORDER = ['stablecoin', 'native', 'crypto', 'stock', 'rwa'];
+
+/** A launch that already uses a ticker, on any chain. */
+export interface TickerUse {
+  launchId: string;
+  chainKey: string;
+  chainName: string;
+  name: string;
+  status: LaunchStatus;
+}
+
 const REFUSALS: Record<DetailsRefusal, () => Error> = {
   'not-creator': () =>
     new ForbiddenException('Only the creator can describe a launch'),
@@ -100,9 +124,9 @@ export class LaunchesService {
   }
 
   /**
-   * The launches shown: those of the Launchpad configured for each chain.
-   * A chain taken out of the configuration, or a contract replaced by a new
-   * one, stops being shown; nothing of it is deleted.
+   * The launches shown: those of the Launchpads configured for each chain.
+   * A chain or a contract taken out of the configuration stops being shown;
+   * nothing of it is deleted.
    */
   private configured(chainKey?: string): Prisma.LaunchWhereInput {
     const chains = [...this.chains.values()].filter(
@@ -111,25 +135,98 @@ export class LaunchesService {
     return {
       OR: chains.map((chain) => ({
         chainKey: chain.key,
-        launchpad: chain.launchpad,
+        launchpad: { in: chain.launchpads.map((item) => item.address) },
       })),
     };
   }
 
   /**
-   * The chains launches can be created on, each with the assets a launch
-   * there can be sold for. The current Launchpad sells for the chain's own
-   * currency; a later one will take a list of allowed assets.
+   * The chains launches can be created on, each with the assets a new launch
+   * there can be paired with and the least each must raise: the chain's own
+   * currency on a v2 Launchpad, the assets a v3 Launchpad allows.
    */
   async listChains(): Promise<{
-    items: (ChainView & { quoteAssets: AssetView[] })[];
+    items: (ChainView & { quoteAssets: QuoteAssetOption[] })[];
   }> {
     const items = [];
     for (const chain of this.chains.values()) {
-      const native = await this.assets.nativeOf(chain.key);
-      items.push({ ...toChainView(chain), quoteAssets: [toAssetView(native)] });
+      items.push({
+        ...toChainView(chain),
+        quoteAssets: await this.quoteAssetsOf(chain),
+      });
     }
     return { items };
+  }
+
+  private async quoteAssetsOf(
+    chain: LaunchpadChainConfig,
+  ): Promise<QuoteAssetOption[]> {
+    const launchpad = currentLaunchpad(chain)!;
+    if (launchpad.version === 2) {
+      const native = await this.assets.nativeOf(chain.key);
+      return [{ ...toAssetView(native), minSoftCap: V2_MIN_SOFT_CAP }];
+    }
+    const rows = await this.prisma.launchpadQuoteAsset.findMany({
+      where: {
+        chainKey: chain.key,
+        launchpad: launchpad.address,
+        allowed: true,
+      },
+      include: { asset: true },
+    });
+    return rows
+      .map((row) => ({
+        ...toAssetView(row.asset),
+        minSoftCap: row.minSoftCap.toFixed(),
+      }))
+      .sort(
+        (a, b) =>
+          KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) ||
+          a.symbol.localeCompare(b.symbol),
+      );
+  }
+
+  /**
+   * The launches, on any configured chain, that use a ticker and still count:
+   * not cancelled and not failed. A v3 Launchpad only stops the same ticker
+   * on its own chain; this is how the front warns about the others.
+   */
+  async tickerUses(
+    symbol: string,
+  ): Promise<{ symbol: string; launches: TickerUse[] }> {
+    const now = new Date();
+    const rows = await this.prisma.launch.findMany({
+      where: {
+        AND: [
+          this.configured(),
+          { symbol: { equals: symbol, mode: 'insensitive' } },
+          { cancelledAt: null },
+        ],
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const launches = rows
+      .map((launch) => ({
+        launchId: launch.id,
+        chainKey: launch.chainKey,
+        chainName: this.chains.get(launch.chainKey)!.name,
+        name: launch.name,
+        status: launchStatus(
+          {
+            startTime: launch.startTime,
+            endTime: launch.endTime,
+            reachedSoftCap: launch.totalRaised.greaterThanOrEqualTo(
+              launch.softCap,
+            ),
+            hardCapReachedAt: launch.hardCapReachedAt,
+            finalizedAt: launch.finalizedAt,
+            cancelledAt: launch.cancelledAt,
+          },
+          now,
+        ),
+      }))
+      .filter((use) => use.status !== 'failed');
+    return { symbol, launches };
   }
 
   /** Launches of the configured chains, the most recently created first. */
@@ -295,7 +392,10 @@ export class LaunchesService {
       include: LAUNCH_INCLUDE,
     });
     const chain = launch ? this.chains.get(launch.chainKey) : undefined;
-    if (!launch || chain?.launchpad !== launch.launchpad) {
+    const shown = chain?.launchpads.some(
+      (item) => item.address === launch?.launchpad,
+    );
+    if (!launch || !shown) {
       throw new NotFoundException('Launch not found');
     }
     return launch;

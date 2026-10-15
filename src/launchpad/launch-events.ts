@@ -1,10 +1,14 @@
 import { decodeEventLog, type Abi } from 'viem';
+import type { LaunchpadVersion } from '../config/chains.js';
 import type { Launch, Prisma } from '../generated/prisma/client.js';
 import { addNotification } from '../notifications/notification-events.js';
 import {
   creatorVestingEvents,
+  creatorVestingV3Events,
   launchpadEvents,
+  launchpadV3Events,
   tokenSaleEvents,
+  tokenSaleV3Events,
 } from './abi.js';
 import type { ChainLog } from './chain-reader.js';
 import { applyPendingDetails } from './launch-details.js';
@@ -15,18 +19,32 @@ type Tx = Prisma.TransactionClient;
 /** Which contract of a launch emitted a log. */
 export type LogSource = 'launchpad' | 'sale' | 'vesting';
 
-const ABI_BY_SOURCE: Record<LogSource, Abi> = {
-  launchpad: launchpadEvents,
-  sale: tokenSaleEvents,
-  vesting: creatorVestingEvents,
+const ABIS: Record<LaunchpadVersion, Record<LogSource, Abi>> = {
+  2: {
+    launchpad: launchpadEvents,
+    sale: tokenSaleEvents,
+    vesting: creatorVestingEvents,
+  },
+  3: {
+    launchpad: launchpadV3Events,
+    sale: tokenSaleV3Events,
+    vesting: creatorVestingV3Events,
+  },
 };
 
 export interface LogContext {
   chainKey: string;
   /** The Launchpad contract being read, in lowercase. */
   launchpad: string;
-  /** The asset launches of this contract are sold for. */
-  quoteAssetId: string;
+  version: LaunchpadVersion;
+  /** The chain's own currency: what every v2 launch is sold for. */
+  nativeAssetId: string;
+  /**
+   * The asset of each token a v3 Launchpad mentions, by address in
+   * lowercase. Its wrapped native currency maps to the native asset: buyers
+   * pay and get paid in the currency itself.
+   */
+  assetIds: Map<string, string>;
   source: LogSource;
   blockHash: string;
   blockTime: Date;
@@ -53,17 +71,38 @@ function toJson(value: unknown): Prisma.InputJsonValue {
  */
 export function newLaunchAddresses(
   log: ChainLog,
+  version: LaunchpadVersion,
 ): { sale: string; vesting: string } | null {
-  const decoded = decode('launchpad', log);
+  const decoded = decode(version, 'launchpad', log);
   if (decoded?.eventName !== 'LaunchCreated') return null;
   const args = decoded.args as { sale: string; vesting: string };
   return { sale: lower(args.sale), vesting: lower(args.vesting) };
 }
 
-function decode(source: LogSource, log: ChainLog) {
+/**
+ * The token a log of a v3 Launchpad pairs launches with, if it names one:
+ * the quote asset of a new launch, or an asset allowed or disallowed. The
+ * indexer registers it before applying the log.
+ */
+export function quoteAssetOf(
+  log: ChainLog,
+  version: LaunchpadVersion,
+): string | null {
+  if (version !== 3) return null;
+  const decoded = decode(version, 'launchpad', log);
+  if (decoded?.eventName === 'LaunchCreated') {
+    return lower((decoded.args as unknown as LaunchCreated).params.quoteAsset!);
+  }
+  if (decoded?.eventName === 'QuoteAssetUpdated') {
+    return lower(decoded.args.asset as string);
+  }
+  return null;
+}
+
+function decode(version: LaunchpadVersion, source: LogSource, log: ChainLog) {
   try {
     return decodeEventLog({
-      abi: ABI_BY_SOURCE[source],
+      abi: ABIS[version][source],
       topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
       data: log.data,
     }) as unknown as { eventName: string; args: Record<string, unknown> };
@@ -82,7 +121,7 @@ export async function applyLog(
   context: LogContext,
   log: ChainLog,
 ): Promise<void> {
-  const decoded = decode(context.source, log);
+  const decoded = decode(context.version, context.source, log);
   if (!decoded) return;
   const { eventName, args } = decoded;
   const address = lower(log.address);
@@ -108,6 +147,9 @@ export async function applyLog(
   if (context.source === 'launchpad') {
     if (eventName === 'LaunchCreated') {
       await createLaunch(tx, context, log, args as unknown as LaunchCreated);
+    }
+    if (eventName === 'QuoteAssetUpdated') {
+      await updateQuoteAsset(tx, context, args);
     }
     return;
   }
@@ -150,6 +192,9 @@ interface LaunchCreated {
     creatorAllocationBps: number;
     liquidityBps: number;
     vestingTranches: number;
+    /** v3 only. */
+    quoteAsset?: string;
+    requiredTier?: number;
   };
   tokensForSale: bigint;
   creatorAllocation: bigint;
@@ -177,7 +222,9 @@ async function createLaunch(
       chainKey: origin.chainKey,
       launchpad: origin.launchpad,
       launchId: origin.launchId,
-      quoteAssetId: context.quoteAssetId,
+      launchpadVersion: context.version,
+      requiredTier: params.requiredTier ?? 0,
+      quoteAssetId: quoteAssetIdOf(context, params.quoteAsset),
       // LaunchToken has 18 decimals
       tokenDecimals: 18,
       tokenAddress: lower(event.token),
@@ -207,6 +254,37 @@ async function createLaunch(
   });
   // The creator may have sent its description and image already
   await applyPendingDetails(tx, launch, new Date());
+}
+
+/** The asset a launch is sold for: always the native one on v2. */
+function quoteAssetIdOf(context: LogContext, quoteAsset?: string): string {
+  if (context.version === 2 || !quoteAsset) return context.nativeAssetId;
+  const id = context.assetIds.get(lower(quoteAsset));
+  // The indexer registers every asset a log names before applying it
+  if (!id) throw new Error(`Asset ${quoteAsset} was not registered`);
+  return id;
+}
+
+/** Records an asset a v3 Launchpad allowed, or stopped allowing. */
+async function updateQuoteAsset(
+  tx: Tx,
+  context: LogContext,
+  args: Record<string, unknown>,
+): Promise<void> {
+  const key = {
+    chainKey: context.chainKey,
+    launchpad: context.launchpad,
+    assetId: quoteAssetIdOf(context, args.asset as string),
+  };
+  const data = {
+    allowed: args.allowed as boolean,
+    minSoftCap: (args.minSoftCap as bigint).toString(),
+  };
+  await tx.launchpadQuoteAsset.upsert({
+    where: { chainKey_launchpad_assetId: key },
+    create: { ...key, ...data },
+    update: data,
+  });
 }
 
 /** The user who holds an EVM wallet, if any does. */
@@ -304,9 +382,13 @@ const HANDLERS: Record<string, Handler> = {
         finalizedAt: blockTime,
         pairAddress: lower(args.pair as string),
         // The v2 contract names the quote asset "native"
-        liquidityQuote: (args.liquidityNative as bigint).toString(),
+        liquidityQuote: (
+          (args.liquidityQuote ?? args.liquidityNative) as bigint
+        ).toString(),
         liquidityTokens: (args.liquidityTokens as bigint).toString(),
-        creatorQuote: (args.creatorNative as bigint).toString(),
+        creatorQuote: (
+          (args.creatorQuote ?? args.creatorNative) as bigint
+        ).toString(),
         fee: (args.fee as bigint).toString(),
         tokensBurned: (args.tokensBurned as bigint).toString(),
       },
@@ -336,6 +418,8 @@ const HANDLERS: Record<string, Handler> = {
     });
   },
 
+  // On v3, `amount` is what was paid back: less than the contribution only if
+  // the issuer of the quote asset took funds from the sale.
   async Refunded(tx, launch, args, { blockTime }) {
     await tx.launchContribution.updateMany({
       where: {
@@ -361,7 +445,9 @@ const HANDLERS: Record<string, Handler> = {
       where: { id: launch.id },
       data: {
         vestingReleasedQuote: {
-          increment: (args.nativeAmount as bigint).toString(),
+          increment: (
+            (args.quoteAmount ?? args.nativeAmount) as bigint
+          ).toString(),
         },
         vestingReleasedTokens: {
           increment: (args.tokenAmount as bigint).toString(),

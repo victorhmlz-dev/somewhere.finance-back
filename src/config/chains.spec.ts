@@ -1,4 +1,4 @@
-import { hasLaunchpad, parseChains } from './chains.js';
+import { currentLaunchpad, hasLaunchpad, parseChains } from './chains.js';
 
 const evm = {
   key: 'sepolia',
@@ -29,8 +29,14 @@ describe('parseChains', () => {
         nativeCurrency: { symbol: 'ETH', name: 'Ether', decimals: 18 },
         rpcUrl: 'https://rpc.example.com',
         chainId: 11155111,
-        launchpad: '0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0',
-        startBlock: 0,
+        launchpads: [
+          {
+            address: '0x9fe46736679d2d9a65f0992f2272de9f3c7fa6e0',
+            version: 2,
+            startBlock: 0,
+          },
+        ],
+        assets: [],
         confirmations: 0,
         logBlockRange: 2000,
       },
@@ -78,6 +84,47 @@ describe('parseChains', () => {
     });
   });
 
+  it('reads several launchpads, creating new launches on the last one', () => {
+    const { launchpad: _launchpad, ...base } = evm;
+    const [chain] = parseChains(
+      JSON.stringify([
+        {
+          ...base,
+          launchpads: [
+            { address: evm.launchpad, version: 2, startBlock: 10 },
+            {
+              address: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+              version: 3,
+              startBlock: 20,
+            },
+          ],
+          assets: [
+            {
+              address: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
+              kind: 'stablecoin',
+              issuer: 'Circle',
+              canFreeze: true,
+            },
+          ],
+        },
+      ]),
+    );
+    expect(chain.family === 'evm' && chain.launchpads).toHaveLength(2);
+    expect(currentLaunchpad(chain)).toEqual({
+      address: '0x5fbdb2315678afecb367f032d93f642f64180aa3',
+      version: 3,
+      startBlock: 20,
+    });
+    expect(chain.family === 'evm' && chain.assets).toEqual([
+      {
+        address: '0x1c7d4b196cb0c7b01d743fbc6116a902379c7238',
+        kind: 'stablecoin',
+        issuer: 'Circle',
+        canFreeze: true,
+      },
+    ]);
+  });
+
   it('tells which chains have a launchpad to read', () => {
     const { launchpad: _launchpad, ...noLaunchpad } = evm;
     const chains = parseChains(
@@ -101,6 +148,41 @@ describe('parseChains', () => {
     ['an invalid node URL', [{ ...evm, rpcUrl: 'nope' }], /rpcUrl/],
     ['an invalid address', [{ ...evm, launchpad: '0x123' }], /launchpad/],
     ['a negative start block', [{ ...evm, startBlock: -1 }], /startBlock/],
+    [
+      'launchpad and launchpads together',
+      [{ ...evm, launchpads: [] }],
+      /not both/,
+    ],
+    [
+      'an unknown launchpad version',
+      [
+        {
+          ...evm,
+          launchpad: undefined,
+          launchpads: [{ address: evm.launchpad, version: 1 }],
+        },
+      ],
+      /version/,
+    ],
+    [
+      'the same launchpad twice',
+      [
+        {
+          ...evm,
+          launchpad: undefined,
+          launchpads: [
+            { address: evm.launchpad, version: 2 },
+            { address: evm.launchpad, version: 3 },
+          ],
+        },
+      ],
+      /different address/,
+    ],
+    [
+      'an asset of an unknown kind',
+      [{ ...evm, assets: [{ address: evm.launchpad, kind: 'meme' }] }],
+      /kind/,
+    ],
     ['a block range of zero', [{ ...evm, logBlockRange: 0 }], /logBlockRange/],
     [
       'currency decimals out of range',

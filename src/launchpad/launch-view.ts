@@ -1,8 +1,10 @@
 import { type AssetView, toAssetView } from '../assets/asset-view.js';
-import type {
-  ChainConfig,
-  ChainFamily,
-  NativeCurrency,
+import {
+  currentLaunchpad,
+  type ChainConfig,
+  type ChainFamily,
+  type LaunchpadVersion,
+  type NativeCurrency,
 } from '../config/chains.js';
 import type {
   Asset,
@@ -27,18 +29,28 @@ export interface ChainView {
   name: string;
   /** What the chain pays its fees in. */
   nativeCurrency: NativeCurrency;
-  /** Address of the Launchpad contract, where launches are created. */
+  /** Address of the Launchpad contract where new launches are created. */
   launchpad: string | null;
+  /** Its version: 2 sells for the chain's currency, 3 for any allowed asset. */
+  launchpadVersion: LaunchpadVersion | null;
 }
 
+/** An asset a new launch can be paired with, and the least it must raise. */
+export type QuoteAssetOption = AssetView & {
+  /** Smallest soft cap, in the asset's smallest unit. */
+  minSoftCap: string;
+};
+
 export function toChainView(chain: ChainConfig): ChainView {
+  const launchpad = currentLaunchpad(chain);
   return {
     key: chain.key,
     family: chain.family,
     chainId: chain.family === 'evm' ? chain.chainId : null,
     name: chain.name,
     nativeCurrency: chain.nativeCurrency,
-    launchpad: chain.family === 'evm' ? chain.launchpad : null,
+    launchpad: launchpad?.address ?? null,
+    launchpadVersion: launchpad?.version ?? null,
   };
 }
 
@@ -50,11 +62,11 @@ export const LAUNCH_INCLUDE = { quoteAsset: true } as const;
 
 /** What the viewer put into a launch and what they got back. */
 export interface ContributionView {
-  /** In wei. */
+  /** In the smallest unit of the quote asset. */
   amount: string;
   /** Tokens already claimed, in the smallest unit. Null if not claimed. */
   claimedTokens: string | null;
-  /** Wei already refunded. Null if not refunded. */
+  /** What was paid back, in the quote asset. Null if not refunded. */
   refundedAmount: string | null;
 }
 
@@ -82,6 +94,10 @@ export interface LaunchView {
   /** What the token is sold for and paired with. */
   quoteAsset: AssetView;
   tokenDecimals: number;
+  /** Version of the Launchpad that created it, which sets how to buy. */
+  launchpadVersion: LaunchpadVersion;
+  /** Verification tier buyers need. Zero for anyone. */
+  requiredTier: number;
   tokenAddress: string;
   /** The contract to contribute to, claim from and ask for refunds. */
   saleAddress: string;
@@ -182,6 +198,8 @@ export function toLaunchView(
     creator: { address: launch.creatorAddress, user: creatorUser },
     quoteAsset: toAssetView(launch.quoteAsset),
     tokenDecimals: launch.tokenDecimals,
+    launchpadVersion: launch.launchpadVersion as LaunchpadVersion,
+    requiredTier: launch.requiredTier,
     tokenAddress: launch.tokenAddress,
     saleAddress: launch.saleAddress,
     vestingAddress: launch.vestingAddress,

@@ -328,13 +328,18 @@ model AuthChallenge {
 model Launch {
   // Derived from the chain: chain, contract, number and block time. Not
   // random, so reading the chain again gives every launch the same id.
-  id        String @id @db.Uuid
+  id               String @id @db.Uuid
   // Which configured chain it lives on, e.g. "ethereum" (see EVM_CHAINS).
-  chainKey  String @map("chain_key") @db.VarChar(32)
+  chainKey         String @map("chain_key") @db.VarChar(32)
   // The Launchpad contract that created it, in lowercase.
-  launchpad String @db.VarChar(42)
+  launchpad        String @db.VarChar(42)
   // Number of the launch inside its Launchpad contract.
-  launchId  Int    @map("launch_id")
+  launchId         Int    @map("launch_id")
+  // Version of that contract: 2 sells for the chain's currency, 3 for any
+  // asset the Launchpad allows.
+  launchpadVersion Int    @default(2) @map("launchpad_version") @db.SmallInt
+  // Verification tier buyers need. Zero for anyone.
+  requiredTier     Int    @default(0) @map("required_tier") @db.SmallInt
 
   // What the token is sold for and paired with: the chain's own currency, a
   // stablecoin, a tokenized stock… Every amount of the sale is in it.
@@ -447,17 +452,36 @@ model ChainEvent {
 }
 
 // How far the indexer has read each chain.
+// How far the indexer has read each Launchpad contract of each chain.
 model ChainCursor {
-  chainKey  String   @id @map("chain_key") @db.VarChar(32)
-  // The Launchpad contract that was read, in lowercase. If the configuration
-  // names another one, the indexer stops instead of mixing two contracts.
-  launchpad String?  @db.VarChar(42)
+  chainKey  String   @map("chain_key") @db.VarChar(32)
+  // The Launchpad contract read, in lowercase.
+  launchpad String   @db.VarChar(42)
   // Last block fully processed.
   lastBlock BigInt   @map("last_block")
   lastHash  String   @map("last_hash") @db.VarChar(66)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  @@id([chainKey, launchpad])
   @@map("chain_cursors")
+}
+
+// The assets a v3 Launchpad lets new launches be paired with, as its
+// QuoteAssetUpdated events say. A row stays when an asset stops being
+// allowed, with allowed = false: launches already paired with it keep it.
+model LaunchpadQuoteAsset {
+  chainKey   String   @map("chain_key") @db.VarChar(32)
+  launchpad  String   @db.VarChar(42)
+  assetId    String   @map("asset_id") @db.Uuid
+  allowed    Boolean
+  // Smallest soft cap a launch paired with it can have, in its smallest unit.
+  minSoftCap Decimal  @map("min_soft_cap") @db.Decimal(78, 0)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@id([chainKey, launchpad, assetId])
+  @@map("launchpad_quote_assets")
 }
 
 /**
@@ -499,22 +523,26 @@ enum AssetKind {
  * say how to read them; nothing assumes 18 decimals or one currency.
  */
 model Asset {
-  id       String    @id @default(uuid(7)) @db.Uuid
-  chainKey String    @map("chain_key") @db.VarChar(32)
+  id        String    @id @default(uuid(7)) @db.Uuid
+  chainKey  String    @map("chain_key") @db.VarChar(32)
   // "native" for the chain's own currency. Otherwise the token's address:
   // in lowercase on EVM chains, as it is (base58) for a Solana mint.
-  address  String    @db.VarChar(64)
-  symbol   String    @db.VarChar(32)
-  name     String    @db.VarChar(100)
-  decimals Int
-  kind     AssetKind
+  address   String    @db.VarChar(64)
+  symbol    String    @db.VarChar(32)
+  name      String    @db.VarChar(100)
+  decimals  Int
+  kind      AssetKind
   // Who issues it, for stocks and other real-world assets.
-  issuer   String?   @db.VarChar(100)
+  issuer    String?   @db.VarChar(100)
+  // Whether the issuer can freeze, pause or take balances, as with USDC or
+  // the Robinhood stock tokens. Users are warned before buying with it.
+  canFreeze Boolean   @default(false) @map("can_freeze")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  launches Launch[]
+  launches  Launch[]
+  allowedOn LaunchpadQuoteAsset[]
 
   @@unique([chainKey, address])
   @@map("assets")

@@ -396,3 +396,504 @@ export const creatorVestingEvents = [
     type: 'event',
   },
 ] as const;
+
+export const launchpadV3Events = [
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: false,
+        internalType: 'address',
+        name: 'attestor',
+        type: 'address',
+      },
+    ],
+    name: 'AttestorUpdated',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [],
+    name: 'EIP712DomainChanged',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: false,
+        internalType: 'address',
+        name: 'feeRecipient',
+        type: 'address',
+      },
+    ],
+    name: 'FeeRecipientUpdated',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: false,
+        internalType: 'uint16',
+        name: 'feeBps',
+        type: 'uint16',
+      },
+    ],
+    name: 'FeeUpdated',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: 'uint256',
+        name: 'launchId',
+        type: 'uint256',
+      },
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'creator',
+        type: 'address',
+      },
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'token',
+        type: 'address',
+      },
+      {
+        indexed: false,
+        internalType: 'address',
+        name: 'sale',
+        type: 'address',
+      },
+      {
+        indexed: false,
+        internalType: 'address',
+        name: 'vesting',
+        type: 'address',
+      },
+      {
+        components: [
+          {
+            internalType: 'string',
+            name: 'name',
+            type: 'string',
+          },
+          {
+            internalType: 'string',
+            name: 'symbol',
+            type: 'string',
+          },
+          {
+            internalType: 'uint256',
+            name: 'totalSupply',
+            type: 'uint256',
+          },
+          {
+            internalType: 'address',
+            name: 'quoteAsset',
+            type: 'address',
+          },
+          {
+            internalType: 'uint256',
+            name: 'softCap',
+            type: 'uint256',
+          },
+          {
+            internalType: 'uint256',
+            name: 'hardCap',
+            type: 'uint256',
+          },
+          {
+            internalType: 'uint256',
+            name: 'minContribution',
+            type: 'uint256',
+          },
+          {
+            internalType: 'uint256',
+            name: 'maxContribution',
+            type: 'uint256',
+          },
+          {
+            internalType: 'uint64',
+            name: 'startTime',
+            type: 'uint64',
+          },
+          {
+            internalType: 'uint64',
+            name: 'endTime',
+            type: 'uint64',
+          },
+          {
+            internalType: 'uint16',
+            name: 'creatorAllocationBps',
+            type: 'uint16',
+          },
+          {
+            internalType: 'uint16',
+            name: 'liquidityBps',
+            type: 'uint16',
+          },
+          {
+            internalType: 'uint8',
+            name: 'vestingTranches',
+            type: 'uint8',
+          },
+          {
+            internalType: 'uint8',
+            name: 'requiredTier',
+            type: 'uint8',
+          },
+        ],
+        indexed: false,
+        internalType: 'struct LaunchpadV3.LaunchParams',
+        name: 'params',
+        type: 'tuple',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'tokensForSale',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'creatorAllocation',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint16',
+        name: 'feeBps',
+        type: 'uint16',
+      },
+    ],
+    name: 'LaunchCreated',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'previousOwner',
+        type: 'address',
+      },
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'newOwner',
+        type: 'address',
+      },
+    ],
+    name: 'OwnershipTransferStarted',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'previousOwner',
+        type: 'address',
+      },
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'newOwner',
+        type: 'address',
+      },
+    ],
+    name: 'OwnershipTransferred',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'asset',
+        type: 'address',
+      },
+      {
+        indexed: false,
+        internalType: 'bool',
+        name: 'allowed',
+        type: 'bool',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'minSoftCap',
+        type: 'uint256',
+      },
+    ],
+    name: 'QuoteAssetUpdated',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: 'uint256',
+        name: 'launchId',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'string',
+        name: 'symbol',
+        type: 'string',
+      },
+    ],
+    name: 'TickerReleased',
+    type: 'event',
+  },
+] as const;
+
+export const tokenSaleV3Events = [
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'tokensBurned',
+        type: 'uint256',
+      },
+    ],
+    name: 'Cancelled',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'contributor',
+        type: 'address',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'tokens',
+        type: 'uint256',
+      },
+    ],
+    name: 'Claimed',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'contributor',
+        type: 'address',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'amount',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'totalRaised',
+        type: 'uint256',
+      },
+    ],
+    name: 'Contributed',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'recipient',
+        type: 'address',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'amount',
+        type: 'uint256',
+      },
+    ],
+    name: 'FeeCollected',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'pair',
+        type: 'address',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'liquidityQuote',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'liquidityTokens',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'liquidityLocked',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'creatorQuote',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'fee',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'tokensBurned',
+        type: 'uint256',
+      },
+    ],
+    name: 'Finalized',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: false,
+        internalType: 'uint64',
+        name: 'version',
+        type: 'uint64',
+      },
+    ],
+    name: 'Initialized',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: 'address',
+        name: 'contributor',
+        type: 'address',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'contribution',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'amount',
+        type: 'uint256',
+      },
+    ],
+    name: 'Refunded',
+    type: 'event',
+  },
+] as const;
+
+export const creatorVestingV3Events = [
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: false,
+        internalType: 'uint64',
+        name: 'version',
+        type: 'uint64',
+      },
+    ],
+    name: 'Initialized',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'quoteAmount',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'tokenAmount',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'tranchesVested',
+        type: 'uint256',
+      },
+    ],
+    name: 'Released',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: false,
+        internalType: 'uint64',
+        name: 'startTime',
+        type: 'uint64',
+      },
+      {
+        indexed: false,
+        internalType: 'uint8',
+        name: 'trancheCount',
+        type: 'uint8',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'totalQuote',
+        type: 'uint256',
+      },
+      {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'totalTokens',
+        type: 'uint256',
+      },
+    ],
+    name: 'VestingStarted',
+    type: 'event',
+  },
+] as const;

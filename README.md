@@ -200,7 +200,8 @@ Los lanzamientos de tokens viven en los contratos de `somewhere.finance-contract
 | Ruta | Sesión | Qué hace |
 |---|---|---|
 | `GET /api/launches` | Opcional | Lanzamientos, del más reciente al más antiguo, paginados |
-| `GET /api/launches/chains` | No | Cadenas configuradas, con la dirección del contrato `Launchpad` de cada una |
+| `GET /api/launches/chains` | No | Cadenas configuradas, con el `Launchpad` donde se crean lanzamientos nuevos (`launchpad`, `launchpadVersion`) y los activos con los que se pueden emparejar, cada uno con su mínimo (`quoteAssets[].minSoftCap`) |
+| `GET /api/launches/tickers/:symbol` | No | Los lanzamientos de cualquier red que ya usan un ticker y siguen contando (ni cancelados ni fallidos). 400 si no son de 1 a 10 caracteres A–Z o 0–9 |
 | `GET /api/launches/token-list` | No | Los tokens de todos los lanzamientos listados, en el formato de lista de tokens que importan wallets y exchanges |
 | `GET /api/launches/:id` | Opcional | Un lanzamiento |
 | `POST /api/launches/details` | Sí | Manda la descripción y la imagen con el hash de la transacción que crea el lanzamiento, antes de que el indexador lo lea |
@@ -242,8 +243,13 @@ Somewhere trabaja con todas las redes, y nada en la API puede asumir una red, un
   "name": "Sepolia",
   "nativeCurrency": { "symbol": "ETH", "name": "Ether", "decimals": 18 },
   "rpcUrl": "https://…",
-  "launchpad": "0x…",
-  "startBlock": 0,
+  "launchpads": [
+    { "address": "0x…", "version": 2, "startBlock": 11916640 },
+    { "address": "0x…", "version": 3, "startBlock": 12000000 }
+  ],
+  "assets": [
+    { "address": "0x1c7D…7238", "kind": "stablecoin", "issuer": "Circle", "canFreeze": true }
+  ],
   "confirmations": 5,
   "logBlockRange": 10
 }, {
@@ -257,14 +263,16 @@ Somewhere trabaja con todas las redes, y nada en la API puede asumir una red, un
 ```
 
 - El formato anterior, `EVM_CHAINS` con `nativeSymbol`, se sigue leyendo como redes EVM con 18 decimales. No se pueden usar las dos variables a la vez.
-- Solo las redes EVM con `launchpad` tienen lanzamientos que leer por ahora; una red de Solana se puede configurar, pero aún no tiene launchpad.
+- Solo las redes EVM con algún Launchpad tienen lanzamientos que leer por ahora; una red de Solana se puede configurar, pero aún no tiene launchpad.
 
-- `launchpad` es la dirección del contrato desplegado y `startBlock` el bloque en que se desplegó.
+- `launchpads` son los contratos `Launchpad` de la red, del más antiguo al más nuevo, cada uno con su versión (`2` vende por la moneda de la red, `3` por cualquier activo que permita) y el bloque en que se desplegó. Se muestran los lanzamientos de todos; los nuevos se crean en el último. El formato anterior, `launchpad` con `startBlock`, se sigue leyendo como una v2.
+- `assets` etiqueta los tokens con los que se emparejan los lanzamientos: tipo (`stablecoin`, `stock`, `rwa` o `crypto`), emisor y si este puede congelarlos (`canFreeze`, que el front avisa antes de comprar). Símbolo, nombre y decimales se leen del propio token. Un token sin etiqueta cuenta como `crypto`.
 - `confirmations` es cuántos bloques espera el indexador antes de leer uno. Lo que el indexador lee no lo deshace, así que en una red real tiene que ser lo bastante alto para que el bloque ya no pueda cambiar. Solo una cadena local admite `0`.
 - `logBlockRange` es cuántos bloques pide el indexador al nodo de una vez (por defecto 2000). Los planes gratuitos de los proveedores lo limitan: en Alchemy gratis, a 10.
 - Si una cadena reemplaza un bloque ya leído, el indexador se detiene y lo dice en el log.
 - Los errores del indexador no muestran la URL del nodo, porque suele llevar la API key del proveedor.
-- El indexador recuerda qué contrato `Launchpad` leyó. Si `CHAINS` pasa a nombrar otro para la misma cadena, lee el nuevo desde su `startBlock` sin borrar nada: los lanzamientos del anterior se quedan en la base de datos, sin mostrarse, con todo lo que la gente añadió. Cambiar de contrato no requiere `launchpad:reset`.
+- El indexador lee cada `Launchpad` por separado, con su propia posición (`chain_cursors` tiene una fila por red y contrato). Uno añadido a la lista se lee desde su `startBlock`; uno quitado deja de mostrarse sin borrar nada: sus lanzamientos se quedan en la base de datos con todo lo que la gente añadió. Añadir o quitar un contrato no requiere `launchpad:reset`.
+- Los activos que permite una v3 salen de sus eventos `QuoteAssetUpdated` (tabla `launchpad_quote_assets`). La versión envuelta de la moneda de la red (WETH) se trata como la moneda misma: quien compra paga y cobra en ETH.
 
 ### Lo que la gente añade nunca se pierde al releer la cadena
 
@@ -276,11 +284,13 @@ El id de un lanzamiento sale de la propia cadena (`src/launchpad/launch-id.ts`):
 
 Cada importe está en un activo, y solo el activo sabe cuántos decimales tiene: 18 el ETH, 6 el USDC, 9 el SOL, lo que use una acción tokenizada. La tabla `assets` guarda cada activo de cada red: dirección (o mint en Solana; `native` para la moneda propia de la red), símbolo, nombre, decimales y tipo (`native`, `crypto`, `stablecoin`, `stock` o `rwa`, con su emisor). La API registra al arrancar la moneda nativa de cada red configurada.
 
-Cada lanzamiento dice con qué activo se compra y se empareja (`quoteAsset`) y cuántos decimales tiene su token (`tokenDecimals`). El Launchpad actual vende siempre por la moneda de la red; uno posterior aceptará una lista de activos permitidos, incluidas acciones tokenizadas. `GET /api/launches/chains` devuelve, por red, los activos con los que se puede lanzar (`quoteAssets`).
+Cada lanzamiento dice con qué activo se compra y se empareja (`quoteAsset`, con `canFreeze`), cuántos decimales tiene su token (`tokenDecimals`), la versión de su Launchpad (`launchpadVersion`, que dice cómo se compra) y el nivel de verificación que exige (`requiredTier`, hoy siempre 0). Un Launchpad v2 vende por la moneda de la red; uno v3, por cualquier activo que permita, acciones tokenizadas incluidas. `GET /api/launches/chains` devuelve, por red, los activos con los que se puede lanzar (`quoteAssets`), las stablecoins primero. En un reembolso de la v3, `refundedAmount` es lo devuelto: menos que lo aportado solo si el emisor del activo se llevó fondos de la venta.
+
+Los tokens se registran la primera vez que un evento los nombra. Si dos procesos lo hacen a la vez, el segundo se queda con la fila del primero.
 
 ### Desarrollo con una cadena local
 
-1. En `somewhere.finance-contracts`: `npm run node` (déjalo abierto) y, en otra terminal, `npm run demo:local`. El segundo crea un Launchpad con tres lanzamientos de ejemplo e imprime la línea `EVM_CHAINS=…`.
+1. En `somewhere.finance-contracts`: `npm run node` (déjalo abierto) y, en otra terminal, `npm run demo:local`. El segundo crea un Launchpad v2 y uno v3, una stablecoin de prueba (MUSD, 6 decimales, repartida a todas las cuentas de Hardhat) y seis lanzamientos de ejemplo, e imprime la línea `CHAINS=…`.
 2. Pega esa línea en el `.env` de este proyecto y arranca la API.
 
 Cada vez que se reinicia la cadena local empieza de cero, y hay que borrar lo indexado de la anterior: `npm run launchpad:reset -- local`. El script solo borra la copia de la cadena y se niega a funcionar con `NODE_ENV=production`.

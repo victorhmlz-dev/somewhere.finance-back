@@ -8,7 +8,14 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const CONTRACTS = ['Launchpad', 'TokenSale', 'CreatorVesting'];
+const CONTRACTS = [
+  'Launchpad',
+  'TokenSale',
+  'CreatorVesting',
+  'LaunchpadV3',
+  'TokenSaleV3',
+  'CreatorVestingV3',
+];
 const artifactsDir = new URL(
   '../../somewhere.finance-contracts/artifacts/contracts/',
   import.meta.url,

@@ -11,6 +11,7 @@ import type {
   ChainBlock,
   ChainLog,
   ChainReader,
+  TokenMetadata,
 } from '../src/launchpad/chain-reader.js';
 
 /** An event to put in a block of the fake chain. */
@@ -30,7 +31,19 @@ export interface FakeEvent {
 export class FakeChain implements ChainReader {
   private readonly blocks: ChainBlock[] = [];
   private readonly logs: ChainLog[] = [];
+  private readonly wrappedNative = new Map<string, Hex>();
+  private readonly tokens = new Map<string, TokenMetadata>();
   private salt = 0;
+
+  /** Says which token a v3 Launchpad wraps the native currency in. */
+  setWrappedNative(launchpad: Hex, token: Hex): void {
+    this.wrappedNative.set(launchpad.toLowerCase(), token);
+  }
+
+  /** Puts a token on the chain, with what it says about itself. */
+  setToken(address: Hex, metadata: TokenMetadata): void {
+    this.tokens.set(address.toLowerCase(), metadata);
+  }
 
   /** Number of the last block. */
   get height(): number {
@@ -97,6 +110,20 @@ export class FakeChain implements ChainReader {
     return block
       ? Promise.resolve(block)
       : Promise.reject(new Error(`Block ${blockNumber} not found`));
+  }
+
+  getWrappedNative(launchpad: Hex): Promise<Hex> {
+    const token = this.wrappedNative.get(launchpad.toLowerCase());
+    return token
+      ? Promise.resolve(token)
+      : Promise.reject(new Error(`${launchpad} has no weth()`));
+  }
+
+  getTokenMetadata(token: Hex): Promise<TokenMetadata> {
+    const metadata = this.tokens.get(token.toLowerCase());
+    return metadata
+      ? Promise.resolve(metadata)
+      : Promise.reject(new Error(`No token at ${token}`));
   }
 
   getLogs(range: {

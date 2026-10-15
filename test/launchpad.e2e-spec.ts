@@ -224,8 +224,8 @@ describe('Launchpad (e2e)', () => {
       name: 'Test chain',
       nativeCurrency: { symbol: 'TST', name: 'Test coin', decimals: 18 },
       rpcUrl: 'http://127.0.0.1:1',
-      launchpad,
-      startBlock: 0,
+      launchpads: [{ address: launchpad, version: 2, startBlock: 0 }],
+      assets: [],
       confirmations: 0,
       logBlockRange: 2000,
     };
@@ -454,7 +454,7 @@ describe('Launchpad (e2e)', () => {
       // As if the app had crashed before saving how far it got.
       const previous = await chain.getBlock(BigInt(firstBlock - 1));
       await prisma.chainCursor.update({
-        where: { chainKey },
+        where: { chainKey_launchpad: { chainKey, launchpad } },
         data: { lastBlock: firstBlock - 1, lastHash: previous.hash },
       });
       expect(await sync()).toBe(2);
@@ -507,6 +507,8 @@ describe('Launchpad (e2e)', () => {
       const reader = {
         getBlockNumber: () => chain.getBlockNumber(),
         getBlock: (n: bigint) => chain.getBlock(n),
+        getWrappedNative: (address: Hex) => chain.getWrappedNative(address),
+        getTokenMetadata: (address: Hex) => chain.getTokenMetadata(address),
         getLogs: (range: Parameters<FakeChain['getLogs']>[0]) => {
           requested.push([range.fromBlock, range.toBlock]);
           return chain.getLogs(range);
@@ -535,7 +537,7 @@ describe('Launchpad (e2e)', () => {
       // Put the test chain back in step for whatever runs next.
       const block = await chain.getBlock(BigInt(chain.height));
       await prisma.chainCursor.update({
-        where: { chainKey },
+        where: { chainKey_launchpad: { chainKey, launchpad } },
         data: { lastHash: block.hash },
       });
     });
@@ -623,7 +625,8 @@ describe('Launchpad (e2e)', () => {
           name: 'Test chain',
           nativeCurrency: { symbol: 'TST', name: 'Test coin', decimals: 18 },
           launchpad,
-          // What a launch there can be sold for
+          launchpadVersion: 2,
+          // What a launch there can be sold for, and the least it must raise
           quoteAssets: [
             {
               chainKey,
@@ -633,6 +636,8 @@ describe('Launchpad (e2e)', () => {
               decimals: 18,
               kind: 'native',
               issuer: null,
+              canFreeze: false,
+              minSoftCap: parseEther('0.01').toString(),
             },
           ],
         },
@@ -1049,16 +1054,26 @@ describe('Launchpad (e2e)', () => {
 
       // Another contract on the same chain, with a launch of its own
       const otherLaunchpad = randomAddress();
+      const otherSymbol = uniqueSymbol();
       chain.mine([
         {
           address: otherLaunchpad,
           abi: launchpadEvents,
           name: 'LaunchCreated',
-          args: newLaunch({ symbol: uniqueSymbol() }),
+          args: newLaunch({ symbol: otherSymbol }),
         } as FakeEvent,
       ]);
-      const other = { ...chainConfig, launchpad: otherLaunchpad.toLowerCase() };
-      await indexer.sync(other as LaunchpadChainConfig, chain);
+      const other: LaunchpadChainConfig = {
+        ...chainConfig,
+        launchpads: [
+          {
+            address: otherLaunchpad.toLowerCase() as Hex,
+            version: 2,
+            startBlock: 0,
+          },
+        ],
+      };
+      await indexer.sync(other, chain);
 
       // Its launch is stored, the previous ones are all still there, and the
       // API keeps showing the configured contract
@@ -1067,8 +1082,13 @@ describe('Launchpad (e2e)', () => {
       );
       expect((await findLaunch(symbol)).symbol).toBe(symbol);
 
-      // Back to the configured one: read again from its start, repeating nothing
+      // Back to the configured one: it goes on from where it was, and the
+      // launch of the other contract stays out of sight
       await sync();
+      const hidden = await api()
+        .get(`/launches?chain=${chainKey}&q=${otherSymbol}`)
+        .expect(200);
+      expect(hidden.body.items).toEqual([]);
       expect(await prisma.launch.count({ where: { chainKey } })).toBe(
         before + 1,
       );

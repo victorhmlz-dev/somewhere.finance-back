@@ -1,4 +1,4 @@
-import { createPublicClient, http, type Hex } from 'viem';
+import { createPublicClient, http, parseAbi, type Hex } from 'viem';
 import type { LaunchpadChainConfig } from '../config/chains.js';
 
 /** A contract event as the chain stores it, before decoding. */
@@ -17,6 +17,13 @@ export interface ChainBlock {
   timestamp: bigint;
 }
 
+/** What a token says about itself. */
+export interface TokenMetadata {
+  symbol: string;
+  name: string;
+  decimals: number;
+}
+
 /** The little the indexer needs from a chain. Tests replace it with a fake. */
 export interface ChainReader {
   getBlockNumber(): Promise<bigint>;
@@ -27,7 +34,17 @@ export interface ChainReader {
     fromBlock: bigint;
     toBlock: bigint;
   }): Promise<ChainLog[]>;
+  /** The wrapped native currency a v3 Launchpad pairs native launches with. */
+  getWrappedNative(launchpad: Hex): Promise<Hex>;
+  getTokenMetadata(token: Hex): Promise<TokenMetadata>;
 }
+
+const READ_ABI = parseAbi([
+  'function weth() view returns (address)',
+  'function symbol() view returns (string)',
+  'function name() view returns (string)',
+  'function decimals() view returns (uint8)',
+]);
 
 export type ChainReaderFactory = (chain: LaunchpadChainConfig) => ChainReader;
 
@@ -57,6 +74,23 @@ export const createRpcChainReader: ChainReaderFactory = (chain) => {
         transactionHash: log.transactionHash,
         logIndex: log.logIndex,
       }));
+    },
+    getWrappedNative: (launchpad) =>
+      client.readContract({
+        address: launchpad,
+        abi: READ_ABI,
+        functionName: 'weth',
+      }),
+    async getTokenMetadata(token) {
+      const read = <F extends 'symbol' | 'name' | 'decimals'>(
+        functionName: F,
+      ) => client.readContract({ address: token, abi: READ_ABI, functionName });
+      const [symbol, name, decimals] = await Promise.all([
+        read('symbol'),
+        read('name'),
+        read('decimals'),
+      ]);
+      return { symbol, name, decimals };
     },
   };
 };
