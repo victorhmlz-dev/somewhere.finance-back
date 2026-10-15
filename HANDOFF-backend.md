@@ -105,6 +105,10 @@ Hecho:
 - Feeds (2026-10-11): timelines "Discover", "My network", perfil y hashtag; tendencias de las últimas 24 horas y sugerencias de a quién seguir. Tabla `post_hashtags`, que se rellena al publicar. Posts y reposts se mezclan en una sola timeline con una consulta SQL directa en `src/feed/feed.service.ts`.
 - Notificaciones (2026-10-11): tipos `like`, `repost`, `follow`, `mention` y `reply`; lista paginada con pestañas, contador de no leídas y marcar todo como leído. La tabla `notifications` guarda una fila por hecho; las filas se agrupan al leerlas ("Aria y 12 más") con una consulta SQL directa en `src/notifications/notifications.service.ts`. Cada fila se crea y se borra dentro de la transacción de lo que la causa (`src/notifications/notification-events.ts`).
 - Launchpad (2026-10-12): un indexador (`src/launchpad/launch-indexer.service.ts`) copia a PostgreSQL los eventos de los contratos de `somewhere.finance-contracts`, y `/api/launches` sirve esa copia con filtros. Tablas `launches`, `launch_contributions`, `chain_events` (cada evento procesado, una sola vez) y `chain_cursors`. Las cadenas se configuran en `EVM_CHAINS`; vacía, no hay Launchpad. El estado de una venta se calcula en cada petición con la misma lógica que el contrato (`src/launchpad/launch-status.ts`). Verificado contra una cadena local con los contratos reales, además de los tests.
+- Subida de imágenes (2026-10-15): `POST /api/uploads/images` (con sesión, campo `file`, PNG/JPEG/GIF/WebP hasta 2 MB, formato leído de los bytes, sin SVG) devuelve `{ url }`, y `GET /api/uploads/:nombre` la sirve con caché inmutable y `nosniff`. Cada imagen se reescribe con `sharp` (sin metadatos ni datos añadidos, máximo 2048 px) y se nombra con el SHA-256 de lo guardado. Los archivos van a `UPLOAD_DIR` (por defecto `uploads/`, ignorada por git) y las URLs usan `PUBLIC_API_URL`.
+- Imagen de un lanzamiento (2026-10-15): solo acepta enlaces de la propia subida y se pone una sola vez (400 para otro enlace, 409 para un segundo cambio). Decisión del usuario: la imagen de un token no se edita nunca. La descripción sí.
+- Lista de tokens (2026-10-15): `GET /api/launches/token-list`, en el formato estándar de Uniswap (tokenlists.org), con los tokens listados y su logo. Validada en los tests contra el esquema oficial. Es la vía elegida para que wallets y exchanges muestren los logos; se descartó por ahora guardar la imagen en IPFS o enlazarla desde el contrato, porque la lista la controlamos nosotros igualmente y un servidor propio permite retirar imágenes ilegales o que suplanten a otros.
+- Cancelación (2026-10-15): estado `cancelled`, columna `cancelled_at` y evento `Cancelled` en el indexador. El filtro `ended` incluye las canceladas.
 - Tests unitarios de la firma, del entorno, de la configuración de cadenas, del estado de un lanzamiento y de la extracción de hashtags y menciones; tests e2e de auth, health, users, posts, feed, notifications y launchpad contra la base de datos real. Los del launchpad usan una cadena falsa en memoria (`test/fake-chain.ts`). Los e2e corren un archivo detrás de otro porque comparten base de datos.
 - `.gitattributes` fija los finales de línea de `prisma/migrations/` en LF. Prisma guarda una huella de cada migración aplicada; si el archivo cambia aunque sea de finales de línea, `prisma migrate dev` pide reiniciar la base de datos.
 
@@ -112,7 +116,7 @@ Límites conocidos de lo hecho:
 
 - La verificación EVM solo cubre wallets normales. Las de contrato (ERC-1271) necesitan una llamada RPC y quedan para la fase on-chain.
 - No hay logout, refresco de token ni forma de vincular una segunda wallet a un usuario.
-- El avatar y la imagen de un post son solo una URL; no hay subida de imágenes.
+- La subida de imágenes guarda en el disco del servidor; en producción hará falta almacenamiento de objetos (S3, R2) o un disco persistente. Las imágenes subidas que no se llegan a usar no se borran. Avatares y posts aún no la usan: el front sigue pidiendo una URL. Retirar una imagen (moderación) aún no tiene herramienta; cuando la tenga, quitar un logo de la lista exige subir el número mayor de su versión.
 - Un repost es una marca sobre el post (tabla `reposts`), no un post nuevo. Sale en "My network" y en el perfil; "Discover" no muestra reposts.
 - Las timelines no deduplican: un post puede salir como post y como repost de varias personas en la misma lista.
 - "Discover" y las sugerencias de a quién seguir son deliberadamente simples (orden cronológico y número de seguidores). Las categorías que el front muestra junto a cada tendencia ("NFTs", "Launchpad") son editoriales y la API no las da.
@@ -201,14 +205,17 @@ El 2026-10-11 el usuario decidió pasar a lo cripto. El Launchpad tiene sus cont
 2. Probar un lanzamiento a mano en Sepolia con las wallets de prueba.
 3. Back: hecho el indexador y las rutas (2026-10-12). Falta la tarea que finalice las ventas exitosas dentro del plazo de 7 días.
 4. Front: hecho (2026-10-12) con viem, decisión del usuario. Para desarrollar: `npm run node` y `npm run demo:local` en contratos, y pegar en el `.env` del back la línea `EVM_CHAINS` que imprime.
-5. Desplegado en Sepolia el 2026-10-14: Launchpad en `0x83c968b3E5EeBaaBe78a6f5f9235207d942804e1`, bloque 11915040, verificado leyendo el contrato en la red. Lo que queda del Launchpad: probar con MetaMask real en Sepolia; la tarea del back que finaliza ventas; las pantallas de vesting y de comisión; y la auditoría antes de cualquier red real.
+5. Desplegado en Sepolia el 2026-10-14: Launchpad en `0x83c968b3E5EeBaaBe78a6f5f9235207d942804e1`, bloque 11915040, verificado leyendo el contrato en la red. El usuario probó el ciclo con MetaMask real en Sepolia con éxito (2026-10-14).
+6. Detalles de esa prueba, hechos el 2026-10-15: imagen de los tokens (subida real, al crear el lanzamiento o después; logo redondo en la tarjeta y en la página, con las iniciales del símbolo si no hay imagen) y un recuadro de mensajes (`components/shared/FormMessage.jsx`) con espacio reservado, para que nada se mueva cuando aparece un error.
+7. Aprobado y hecho el 2026-10-15 en todo el stack: imagen fija para siempre, lista de tokens, botón "Add to wallet" (EIP-747) y cancelación por el creador solo antes del inicio (decisión D17 de `docs/ARCHITECTURE.md`). La cancelación cambia el contrato `TokenSale`: la v2 se desplegó en Sepolia el 2026-10-15 en `0xB393ef85b97f9A0391cC612Eb97707E7078E0261`, bloque 11916640 (registro en `ignition/deployments/sepolia-v2/`), verificada leyendo el contrato en la red. La v1 (`0x83c9…04e1`) queda sin uso. Probado en local de punta a punta: contratos reales, indexador, API y navegador con una wallet de prueba.
+8. Lo que queda del Launchpad: las pantallas de vesting y de comisión; la tarea del back que finaliza ventas; aligerar viem en el front; y la auditoría antes de cualquier red real.
 
 Después: Somewhere Parabolic y el Trust Graph. Lo de NFT queda pendiente.
 
 Quedó aparcado de lo social, sin orden acordado:
 
 - Tiempo real para notificaciones y feeds.
-- Subida de imágenes para avatares y posts.
+- Usar la subida de imágenes (ya existe en el back) para avatares y posts, y el recuadro `FormMessage` en el resto de formularios.
 - Las opiniones bullish/bearish de la terminal de trading, que son sociales pero cuelgan de un token.
 - Buscador de usuarios y posts; listas de followers y following en el perfil (la API ya las da, el front no las muestra).
 

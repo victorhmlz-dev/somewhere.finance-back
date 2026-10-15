@@ -49,6 +49,7 @@ src/posts/             Posts, replies, likes, reposts y extracción de hashtags
 src/feed/              Timelines, tendencias y sugerencias de a quién seguir
 src/notifications/     Notificaciones
 src/launchpad/         Lanzamientos de tokens: indexador de la cadena y rutas
+src/uploads/           Subida de imágenes y su descarga
 scripts/               Utilidades de desarrollo
 src/common/            Piezas compartidas, como la paginación
 src/health/            Comprobación de estado
@@ -185,19 +186,29 @@ Los lanzamientos de tokens viven en los contratos de `somewhere.finance-contract
 |---|---|---|
 | `GET /api/launches` | Opcional | Lanzamientos, del más reciente al más antiguo, paginados |
 | `GET /api/launches/chains` | No | Cadenas configuradas, con la dirección del contrato `Launchpad` de cada una |
+| `GET /api/launches/token-list` | No | Los tokens de todos los lanzamientos listados, en el formato de lista de tokens que importan wallets y exchanges |
 | `GET /api/launches/:id` | Opcional | Un lanzamiento |
-| `PATCH /api/launches/:id` | Sí | Pone la descripción y la imagen; solo el usuario dueño de la wallet que lo creó |
+| `PATCH /api/launches/:id` | Sí | Cambia la descripción y pone la imagen; solo el usuario dueño de la wallet que lo creó |
 
 Filtros de la lista: `chain` (clave de la cadena), `status` (`upcoming`, `live` o `ended`), `creator` (dirección de wallet) y `q` (texto en el nombre o el símbolo).
 
 Sobre la respuesta:
 
 - **Los importes son cadenas de texto** en la unidad mínima (wei para la moneda nativa, 18 decimales para el token), porque no caben en un número.
-- `status` es `upcoming`, `live`, `succeeded`, `failed` o `finalized`, calculado en cada petición con la misma lógica que el contrato: una venta cambia de estado al pasar el tiempo, sin que haya ningún evento.
+- `status` es `upcoming`, `live`, `succeeded`, `failed`, `finalized` o `cancelled`, calculado en cada petición con la misma lógica que el contrato: una venta cambia de estado al pasar el tiempo, sin que haya ningún evento.
+- `cancelledAt` indica cuándo el creador canceló la venta, algo que solo puede hacer antes de que empiece. El filtro `ended` incluye las canceladas.
 - `finalizeBy` indica hasta cuándo se puede listar una venta exitosa. Pasado ese plazo de 7 días la venta pasa a fallida.
 - `myContribution` es lo que aportó el usuario de la sesión con sus wallets, y si ya retiró tokens o reembolso.
 - `creator.user` es el perfil de Somewhere del creador, si su wallet pertenece a algún usuario.
-- La descripción y la imagen son lo único que no está en la cadena.
+- La descripción y la imagen son lo único que no está en la cadena. La descripción se puede cambiar siempre. **La imagen se pone una sola vez y no cambia nunca**, y tiene que ser una subida a esta API (`POST /api/uploads/images`): cualquier otro enlace se rechaza con 400 y un segundo cambio con 409. Así nadie puede cambiar el logo de un token para hacerse pasar por otro.
+
+### Lista de tokens
+
+`GET /api/launches/token-list` publica los tokens de los lanzamientos listados en el [formato estándar de listas de tokens](https://tokenlists.org) (el de Uniswap), que cualquier wallet o exchange puede importar con esa URL. Un test la valida contra el esquema oficial.
+
+- Solo entran los tokens ya listados, ordenados por fecha de listado. Una venta que no llega a listarse nunca aparece.
+- El formato limita el nombre a 60 caracteres y no admite espacios en el símbolo; los pocos tokens que no cumplen se dejan fuera para que la lista siga siendo válida.
+- La versión se calcula de la propia lista: el número menor cuenta los tokens y el de parche las imágenes. Como un token listado nunca sale y su imagen solo se pone una vez, la versión solo sube.
 
 ### Configurar las cadenas
 
@@ -231,6 +242,19 @@ Sobre la respuesta:
 Cada vez que se reinicia la cadena local empieza de cero, y hay que borrar lo indexado de la anterior: `npm run launchpad:reset -- local`.
 
 Si cambia un evento de los contratos, `npm run abi:sync` regenera `src/launchpad/abi.ts` a partir de los contratos compilados.
+
+## Imágenes
+
+| Ruta | Sesión | Qué hace |
+|---|---|---|
+| `POST /api/uploads/images` | Sí | Guarda una imagen enviada como `multipart/form-data` en el campo `file` y devuelve `{ url }` |
+| `GET /api/uploads/:nombre` | No | Sirve una imagen guardada |
+
+- Acepta PNG, JPEG, GIF y WebP de hasta 2 MB. El formato se lee del contenido del archivo, no del nombre ni del tipo que manda el navegador. SVG no se acepta porque puede llevar scripts.
+- Cada imagen se decodifica y se vuelve a escribir en su formato con `sharp` antes de guardarla. Solo queda la imagen: se pierden los metadatos ocultos (como la posición GPS de una foto) y cualquier cosa añadida al archivo. Las de más de 2048 px de lado se reducen.
+- El archivo se nombra con el SHA-256 de lo guardado. Un enlace siempre muestra la misma imagen, cualquiera puede comprobarlo, y la misma imagen subida dos veces se guarda una. Por eso se sirve con caché de un año.
+- La `url` devuelta es la que se guarda después en un perfil (`avatar`) o en un lanzamiento (`image`). Se construye con `PUBLIC_API_URL` (por defecto `http://localhost:<PORT>/api`).
+- Los archivos van a la carpeta `UPLOAD_DIR` (por defecto `uploads/`, ignorada por git). En producción hará falta un almacenamiento de objetos (S3, R2…) o un disco persistente; las imágenes subidas que nadie llega a usar todavía no se borran.
 
 ## Paginación
 

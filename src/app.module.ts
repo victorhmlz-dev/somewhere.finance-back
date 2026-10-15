@@ -9,6 +9,7 @@ import { LaunchpadModule } from './launchpad/launchpad.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { PostsModule } from './posts/posts.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { UploadsModule } from './uploads/uploads.module.js';
 import { UsersModule } from './users/users.module.js';
 
 @Module({
@@ -22,6 +23,7 @@ import { UsersModule } from './users/users.module.js';
     FeedModule,
     NotificationsModule,
     LaunchpadModule,
+    UploadsModule,
   ],
   providers: [
     {

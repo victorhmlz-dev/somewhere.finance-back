@@ -255,11 +255,16 @@ model Launch {
   tokensBurned    Decimal?  @map("tokens_burned") @db.Decimal(78, 0)
   feeCollectedAt  DateTime? @map("fee_collected_at") @db.Timestamptz(0)
 
+  // Set when the creator cancels the sale before it starts. Every token was
+  // burned; the amount is in tokensBurned.
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(0)
+
   // What the creator's vesting has paid out so far.
   vestingReleasedNative Decimal @default(0) @map("vesting_released_native") @db.Decimal(78, 0)
   vestingReleasedTokens Decimal @default(0) @map("vesting_released_tokens") @db.Decimal(78, 0)
 
-  // Written by the creator through the API; not on chain.
+  // Written by the creator through the API; not on chain. The image can be
+  // set once and never changed; it must be a file uploaded to this API.
   description String  @default("") @db.VarChar(280)
   imageUrl    String? @map("image_url")
 

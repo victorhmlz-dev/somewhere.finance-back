@@ -16,10 +16,18 @@ const launch = (changes: Partial<LaunchTimeline> = {}): LaunchTimeline => ({
   reachedSoftCap: false,
   hardCapReachedAt: null,
   finalizedAt: null,
+  cancelledAt: null,
   ...changes,
 });
 
 describe('launchStatus', () => {
+  it('stays cancelled whatever time it is', () => {
+    const sale = launch({ cancelledAt: at(start, -DAY) });
+    expect(launchStatus(sale, at(start, -1000))).toBe('cancelled');
+    expect(launchStatus(sale, at(end, 30 * DAY))).toBe('cancelled');
+    expect(finalizeDeadline(sale, end)).toBeNull();
+  });
+
   it('is upcoming until the second the sale starts', () => {
     expect(launchStatus(launch(), at(start, -1000))).toBe('upcoming');
     expect(launchStatus(launch(), start)).toBe('live');

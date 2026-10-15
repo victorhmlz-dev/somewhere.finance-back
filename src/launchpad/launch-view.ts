@@ -71,6 +71,8 @@ export interface LaunchView {
   endsAt: string;
   /** Set while a successful sale waits to be finalized: until when it can be. */
   finalizeBy: string | null;
+  /** Set when the creator cancelled the sale before it started. */
+  cancelledAt: string | null;
 
   /** The rules of this launch, as percentages. */
   creatorAllocationPercent: number;
@@ -129,6 +131,7 @@ export function toLaunchView(
     reachedSoftCap: launch.totalRaised.greaterThanOrEqualTo(launch.softCap),
     hardCapReachedAt: launch.hardCapReachedAt,
     finalizedAt: launch.finalizedAt,
+    cancelledAt: launch.cancelledAt,
   };
 
   return {
@@ -155,6 +158,7 @@ export function toLaunchView(
     startsAt: launch.startTime.toISOString(),
     endsAt: launch.endTime.toISOString(),
     finalizeBy: finalizeDeadline(timeline, now)?.toISOString() ?? null,
+    cancelledAt: launch.cancelledAt?.toISOString() ?? null,
     creatorAllocationPercent: bpsToPercent(launch.creatorAllocationBps),
     liquidityPercent: bpsToPercent(launch.liquidityBps),
     feePercent: bpsToPercent(launch.feeBps),

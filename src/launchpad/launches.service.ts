@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -13,6 +15,7 @@ import type {
   Prisma,
 } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { UploadsService } from '../uploads/uploads.service.js';
 import { toUserSummary, type UserSummary } from '../users/user-profile.js';
 import {
   ListLaunchesQueryDto,
@@ -25,6 +28,7 @@ import {
   toChainView,
   toLaunchView,
 } from './launch-view.js';
+import { type TokenList, toTokenList } from './token-list.js';
 
 /**
  * The three filters of the front as conditions on the stored rows. A launch
@@ -34,7 +38,7 @@ function statusCondition(
   status: LaunchStatusFilter,
   now: Date,
 ): Prisma.LaunchWhereInput {
-  const open = { finalizedAt: null, hardCapReachedAt: null };
+  const open = { finalizedAt: null, hardCapReachedAt: null, cancelledAt: null };
   if (status === 'upcoming') return { ...open, startTime: { gt: now } };
   if (status === 'live') {
     return { ...open, startTime: { lte: now }, endTime: { gt: now } };
@@ -43,6 +47,7 @@ function statusCondition(
     OR: [
       { finalizedAt: { not: null } },
       { hardCapReachedAt: { not: null } },
+      { cancelledAt: { not: null } },
       { endTime: { lte: now } },
     ],
   };
@@ -54,6 +59,7 @@ export class LaunchesService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly uploads: UploadsService,
     config: ConfigService<Env, true>,
   ) {
     const chains = config.get('EVM_CHAINS', { infer: true });
@@ -100,6 +106,31 @@ export class LaunchesService {
     };
   }
 
+  /** The tokens of every listed launch, in the token list format. */
+  async tokenList(): Promise<TokenList> {
+    const launches = await this.prisma.launch.findMany({
+      where: {
+        chainKey: { in: [...this.chains.keys()] },
+        finalizedAt: { not: null },
+      },
+      orderBy: [{ finalizedAt: 'asc' }, { id: 'asc' }],
+      select: {
+        chainKey: true,
+        tokenAddress: true,
+        name: true,
+        symbol: true,
+        imageUrl: true,
+      },
+    });
+    return toTokenList(
+      launches.map((launch) => ({
+        ...launch,
+        chainId: this.chains.get(launch.chainKey)!.chainId,
+      })),
+      new Date(),
+    );
+  }
+
   async get(id: string, viewerId?: string): Promise<LaunchView> {
     const launch = await this.findConfigured(id);
     const [view] = await this.toViews([launch], viewerId, new Date());
@@ -118,11 +149,36 @@ export class LaunchesService {
       throw new ForbiddenException('Only the creator can edit a launch');
     }
 
-    await this.prisma.launch.update({
-      where: { id },
-      data: { description: dto.description, imageUrl: dto.image },
-    });
+    if (dto.image !== undefined && dto.image !== launch.imageUrl) {
+      await this.setImage(launch, dto.image);
+    }
+    if (dto.description !== undefined) {
+      await this.prisma.launch.update({
+        where: { id },
+        data: { description: dto.description },
+      });
+    }
     return this.get(id, userId);
+  }
+
+  /** The image is set once, only to a file uploaded to this API. */
+  private async setImage(launch: Launch, url: string): Promise<void> {
+    if (launch.imageUrl) {
+      throw new ConflictException('The image of a launch cannot be changed');
+    }
+    if (!(await this.uploads.storedNameOf(url))) {
+      throw new BadRequestException(
+        'image must be an image uploaded to Somewhere',
+      );
+    }
+    // Conditional, so two requests at once cannot both set it
+    const { count } = await this.prisma.launch.updateMany({
+      where: { id: launch.id, imageUrl: null },
+      data: { imageUrl: url },
+    });
+    if (count === 0) {
+      throw new ConflictException('The image of a launch cannot be changed');
+    }
   }
 
   private async findConfigured(id: string): Promise<Launch> {

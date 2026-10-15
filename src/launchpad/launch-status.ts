@@ -1,6 +1,6 @@
 /** Same states as `TokenSale.Status` in the contracts, in lowercase. */
 export type LaunchStatus =
-  'upcoming' | 'live' | 'succeeded' | 'failed' | 'finalized';
+  'upcoming' | 'live' | 'succeeded' | 'failed' | 'finalized' | 'cancelled';
 
 /** `TokenSale.FINALIZE_GRACE_PERIOD`: how long a successful sale can be listed. */
 export const FINALIZE_GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
@@ -12,6 +12,7 @@ export interface LaunchTimeline {
   reachedSoftCap: boolean;
   hardCapReachedAt: Date | null;
   finalizedAt: Date | null;
+  cancelledAt: Date | null;
 }
 
 /** When a sale became successful, or null if it has not (yet). */
@@ -26,6 +27,7 @@ function succeededAt(launch: LaunchTimeline, now: Date): Date | null {
  * a sale changes state as time passes, without any event to index.
  */
 export function launchStatus(launch: LaunchTimeline, now: Date): LaunchStatus {
+  if (launch.cancelledAt) return 'cancelled';
   if (launch.finalizedAt) return 'finalized';
   if (now < launch.startTime) return 'upcoming';
 

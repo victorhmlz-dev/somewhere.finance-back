@@ -3,6 +3,8 @@ import { type EvmChainConfig, parseEvmChains } from './evm-chains.js';
 export interface Env {
   PORT: number;
   FRONT_URL: string;
+  /** Address the API is reached at from outside, e.g. in links to uploads. */
+  PUBLIC_API_URL: string;
   DATABASE_URL: string;
   JWT_SECRET: string;
   JWT_EXPIRES_IN_SECONDS: number;
@@ -10,6 +12,8 @@ export interface Env {
   EVM_CHAINS: EvmChainConfig[];
   /** How often each chain is checked for new blocks. */
   INDEXER_POLL_MS: number;
+  /** Folder uploaded images are kept in. */
+  UPLOAD_DIR: string;
 }
 
 const ONE_WEEK_IN_SECONDS = 60 * 60 * 24 * 7;
@@ -34,6 +38,18 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     throw new Error('FRONT_URL must be a valid URL');
   }
 
+  const publicApiUrl = String(
+    raw.PUBLIC_API_URL ?? `http://localhost:${port}/api`,
+  ).replace(/\/+$/, '');
+  if (!URL.canParse(publicApiUrl)) {
+    throw new Error('PUBLIC_API_URL must be a valid URL');
+  }
+
+  const uploadDir = raw.UPLOAD_DIR ?? 'uploads';
+  if (typeof uploadDir !== 'string' || uploadDir.trim() === '') {
+    throw new Error('UPLOAD_DIR must be a folder');
+  }
+
   const jwtSecret = raw.JWT_SECRET;
   if (typeof jwtSecret !== 'string' || jwtSecret.length < 32) {
     throw new Error('JWT_SECRET must be at least 32 characters long');
@@ -54,10 +70,12 @@ export function validateEnv(raw: Record<string, unknown>): Env {
   return {
     PORT: port,
     FRONT_URL: frontUrl,
+    PUBLIC_API_URL: publicApiUrl,
     DATABASE_URL: databaseUrl,
     JWT_SECRET: jwtSecret,
     JWT_EXPIRES_IN_SECONDS: jwtExpiresIn,
     EVM_CHAINS: parseEvmChains(raw.EVM_CHAINS),
     INDEXER_POLL_MS: indexerPollMs,
+    UPLOAD_DIR: uploadDir,
   };
 }

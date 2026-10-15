@@ -42,6 +42,15 @@ export class LaunchesController {
     return this.launches.listChains();
   }
 
+  /**
+   * The tokens of every listed launch, in the token list format that wallets
+   * and exchanges import (tokenlists.org).
+   */
+  @Get('token-list')
+  tokenList() {
+    return this.launches.tokenList();
+  }
+
   @Get(':id')
   @UseGuards(OptionalAuthGuard)
   get(
@@ -51,7 +60,7 @@ export class LaunchesController {
     return this.launches.get(id, viewer?.id);
   }
 
-  /** Sets the description and the image, which are not on chain. */
+  /** Sets the description, and the image once. Neither is on chain. */
   @Patch(':id')
   @UseGuards(AuthGuard)
   update(

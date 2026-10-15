@@ -1,7 +1,14 @@
 import { randomBytes } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { parseEther, type Hex } from 'viem';
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
+import sharp from 'sharp';
+import { getAddress, parseEther, type Hex } from 'viem';
 import type { App } from 'supertest/types.js';
 import type { EvmChainConfig } from '../src/config/evm-chains.js';
 import {
@@ -16,6 +23,17 @@ import { PrismaService } from '../src/prisma/prisma.service.js';
 import { FakeChain, type FakeEvent } from './fake-chain.js';
 import { apiClient, signIn, type TestSession } from './session.js';
 import { createEvmWallet } from './wallets.js';
+
+// The official schema of the token list format, from @uniswap/token-lists
+const tokenListSchema = createRequire(import.meta.url)(
+  '@uniswap/token-lists/src/tokenlist.schema.json',
+) as object;
+
+/** A small PNG of one colour, so each colour is a different file. */
+const pngOf = (background: string) =>
+  sharp({ create: { width: 4, height: 4, channels: 3, background } })
+    .png()
+    .toBuffer();
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -34,7 +52,10 @@ describe('Launchpad (e2e)', () => {
   const previousEnv = {
     EVM_CHAINS: process.env.EVM_CHAINS,
     INDEXER_POLL_MS: process.env.INDEXER_POLL_MS,
+    UPLOAD_DIR: process.env.UPLOAD_DIR,
+    PUBLIC_API_URL: process.env.PUBLIC_API_URL,
   };
+  let uploadDir: string;
 
   const chainKey = `e2e-${randomBytes(4).toString('hex')}`;
   const launchpad = randomAddress();
@@ -115,6 +136,8 @@ describe('Launchpad (e2e)', () => {
         saleEvent('Claimed', { contributor, tokens: parseEther(tokens) }),
       refunded: (contributor: Hex, amount: string) =>
         saleEvent('Refunded', { contributor, amount: parseEther(amount) }),
+      cancelled: () =>
+        saleEvent('Cancelled', { tokensBurned: parseEther('1000000') }),
       released: (nativeAmount: string, tokenAmount: string) =>
         ({
           address: launch.vesting,
@@ -140,6 +163,17 @@ describe('Launchpad (e2e)', () => {
     return response.body.items[0];
   };
 
+  const uploadImage = async (session: TestSession, colour: string) => {
+    const response = await api(session)
+      .post('/uploads/images')
+      .attach('file', await pngOf(colour), {
+        filename: 'logo.png',
+        contentType: 'image/png',
+      })
+      .expect(201);
+    return response.body.url as string;
+  };
+
   const uniqueSymbol = () => `T${randomBytes(4).toString('hex').toUpperCase()}`;
 
   beforeAll(async () => {
@@ -156,6 +190,9 @@ describe('Launchpad (e2e)', () => {
     ]);
     // The app's own polling stays out of the way; the tests call sync().
     process.env.INDEXER_POLL_MS = String(DAY);
+    uploadDir = await mkdtemp(join(tmpdir(), 'somewhere-launch-uploads-'));
+    process.env.UPLOAD_DIR = uploadDir;
+    process.env.PUBLIC_API_URL = 'https://api.test';
 
     // The app reads its configuration when it is first imported, so it is
     // imported only now that the variables above are set.
@@ -196,6 +233,7 @@ describe('Launchpad (e2e)', () => {
       where: { address: { in: createdAddresses } },
     });
     await app.close();
+    await rm(uploadDir, { recursive: true, force: true });
     for (const [name, value] of Object.entries(previousEnv)) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
@@ -335,6 +373,34 @@ describe('Launchpad (e2e)', () => {
         claimedTokens: null,
         refundedAmount: parseEther('1').toString(),
       });
+    });
+
+    it('records a sale its creator cancelled before it started', async () => {
+      const symbol = uniqueSymbol();
+      const now = Date.now();
+      const launch = newLaunch({
+        symbol,
+        startTime: new Date(now + DAY),
+        endTime: new Date(now + 2 * DAY),
+      });
+      chain.mine([launch.created]);
+      chain.mine([launch.cancelled()]);
+      await sync();
+
+      const cancelled = await findLaunch(symbol);
+      expect(cancelled.status).toBe('cancelled');
+      expect(cancelled.cancelledAt).not.toBeNull();
+      expect(cancelled.listing).toBeNull();
+
+      const inGroup = async (status: string) => {
+        const response = await api()
+          .get(`/launches?chain=${chainKey}&q=${symbol}&status=${status}`)
+          .expect(200);
+        return response.body.items.length;
+      };
+      expect(await inGroup('upcoming')).toBe(0);
+      expect(await inGroup('live')).toBe(0);
+      expect(await inGroup('ended')).toBe(1);
     });
 
     it('changes nothing when the same blocks are read twice', async () => {
@@ -535,52 +601,138 @@ describe('Launchpad (e2e)', () => {
   });
 
   describe('the creator of a launch', () => {
-    it('is shown with their Somewhere profile and can describe the launch', async () => {
+    async function ownLaunch() {
       const { wallet, session } = await newUser();
-      const other = await newUser();
       const symbol = uniqueSymbol();
-      const launch = newLaunch({
-        symbol,
-        creator: wallet.address.toLowerCase() as Hex,
-      });
-      chain.mine([launch.created]);
+      chain.mine([
+        newLaunch({ symbol, creator: wallet.address.toLowerCase() as Hex })
+          .created,
+      ]);
       await sync();
-      const { id, creator } = await findLaunch(symbol);
-      expect(creator.user).toMatchObject({ handle: session.user.handle });
+      return { session, launch: await findLaunch(symbol) };
+    }
+
+    it('is shown with their Somewhere profile and can describe the launch', async () => {
+      const { session, launch } = await ownLaunch();
+      const other = await newUser();
+      expect(launch.creator.user).toMatchObject({
+        handle: session.user.handle,
+      });
 
       const changes = {
         description: '  Governance token for Void Protocol holders.  ',
-        image: 'https://example.com/void.png',
       };
-      await api().patch(`/launches/${id}`).send(changes).expect(401);
+      await api().patch(`/launches/${launch.id}`).send(changes).expect(401);
       await api(other.session)
-        .patch(`/launches/${id}`)
+        .patch(`/launches/${launch.id}`)
         .send(changes)
         .expect(403);
       await api(session)
-        .patch(`/launches/${id}`)
+        .patch(`/launches/${launch.id}`)
         .send({ hardCap: '1' })
         .expect(400);
 
       const edited = await api(session)
-        .patch(`/launches/${id}`)
+        .patch(`/launches/${launch.id}`)
         .send(changes)
         .expect(200);
       expect(edited.body).toMatchObject({
         description: 'Governance token for Void Protocol holders.',
-        image: 'https://example.com/void.png',
+        image: null,
         // Nothing that lives on chain can be touched this way.
         hardCap: parseEther('10').toString(),
       });
 
-      const cleared = await api(session)
-        .patch(`/launches/${id}`)
-        .send({ image: null })
+      const again = await api(session)
+        .patch(`/launches/${launch.id}`)
+        .send({ description: 'Second thoughts.' })
         .expect(200);
-      expect(cleared.body).toMatchObject({
-        description: 'Governance token for Void Protocol holders.',
-        image: null,
-      });
+      expect(again.body.description).toBe('Second thoughts.');
+    });
+
+    it('sets the image once, only to an image uploaded to Somewhere', async () => {
+      const { session, launch } = await ownLaunch();
+      const blue = await uploadImage(session, '#5142fc');
+      const red = await uploadImage(session, '#ff0000');
+      const patch = (body: object) =>
+        api(session).patch(`/launches/${launch.id}`).send(body);
+
+      await patch({ image: 'https://example.com/void.png' }).expect(400);
+      await patch({
+        image: `https://api.test/uploads/${'a'.repeat(64)}.png`,
+      }).expect(400);
+      await patch({ image: null }).expect(400);
+
+      expect((await patch({ image: blue }).expect(200)).body.image).toBe(blue);
+      // Sending the same image again is not a change
+      await patch({ image: blue, description: 'Still blue' }).expect(200);
+      await patch({ image: red }).expect(409);
+      await patch({ image: null }).expect(400);
+
+      expect((await findLaunch(launch.symbol)).image).toBe(blue);
+    });
+  });
+
+  describe('the token list', () => {
+    it('lists every listed token in the standard format, and only those', async () => {
+      const { wallet, session } = await newUser();
+      const creator = wallet.address.toLowerCase() as Hex;
+      const withImage = newLaunch({ creator, symbol: uniqueSymbol() });
+      const withoutImage = newLaunch({ creator, symbol: uniqueSymbol() });
+      const stillLive = newLaunch({ creator, symbol: uniqueSymbol() });
+      const oddSymbol = newLaunch({ creator, symbol: 'TWO WORDS' });
+      chain.mine([
+        withImage.created,
+        withoutImage.created,
+        stillLive.created,
+        oddSymbol.created,
+      ]);
+      chain.mine([
+        withImage.finalized(),
+        withoutImage.finalized(),
+        oddSymbol.finalized(),
+      ]);
+      await sync();
+
+      const before = (await api().get('/launches/token-list').expect(200)).body;
+      const { id } = await findLaunch(withImage.params.symbol);
+      const image = await uploadImage(session, '#00ff00');
+      await api(session).patch(`/launches/${id}`).send({ image }).expect(200);
+
+      const list = (await api().get('/launches/token-list').expect(200)).body;
+      const validate = addFormats(new Ajv({ allErrors: true })).compile(
+        tokenListSchema,
+      );
+      expect(validate(list), JSON.stringify(validate.errors)).toBe(true);
+
+      const ours = [withImage, withoutImage, stillLive, oddSymbol].map(
+        (launch) => getAddress(launch.token),
+      );
+      expect(
+        list.tokens.filter((token: { address: string }) =>
+          ours.includes(token.address as Hex),
+        ),
+      ).toEqual([
+        {
+          chainId: 31337,
+          address: getAddress(withImage.token),
+          name: 'Void Token',
+          symbol: withImage.params.symbol,
+          decimals: 18,
+          logoURI: image,
+        },
+        {
+          chainId: 31337,
+          address: getAddress(withoutImage.token),
+          name: 'Void Token',
+          symbol: withoutImage.params.symbol,
+          decimals: 18,
+        },
+      ]);
+
+      // Adding an image is a change to a token: the patch number goes up
+      expect(list.version.minor).toBe(before.version.minor);
+      expect(list.version.patch).toBe(before.version.patch + 1);
     });
   });
 });

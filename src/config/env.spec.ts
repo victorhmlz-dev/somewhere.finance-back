@@ -11,10 +11,28 @@ describe('validateEnv', () => {
       ...required,
       PORT: 3001,
       FRONT_URL: 'http://localhost:3000',
+      PUBLIC_API_URL: 'http://localhost:3001/api',
       JWT_EXPIRES_IN_SECONDS: 604800,
       EVM_CHAINS: [],
       INDEXER_POLL_MS: 4000,
+      UPLOAD_DIR: 'uploads',
     });
+  });
+
+  it('builds the default PUBLIC_API_URL from PORT and drops a final slash', () => {
+    expect(validateEnv({ ...required, PORT: '4000' }).PUBLIC_API_URL).toBe(
+      'http://localhost:4000/api',
+    );
+    expect(
+      validateEnv({ ...required, PUBLIC_API_URL: 'https://api.example.com/' })
+        .PUBLIC_API_URL,
+    ).toBe('https://api.example.com');
+  });
+
+  it('rejects an invalid PUBLIC_API_URL', () => {
+    expect(() => validateEnv({ ...required, PUBLIC_API_URL: 'nope' })).toThrow(
+      /PUBLIC_API_URL/,
+    );
   });
 
   it('parses PORT from its string form', () => {

@@ -196,6 +196,19 @@ export const tokenSaleEvents = [
     anonymous: false,
     inputs: [
       {
+        indexed: false,
+        internalType: 'uint256',
+        name: 'tokensBurned',
+        type: 'uint256',
+      },
+    ],
+    name: 'Cancelled',
+    type: 'event',
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
         indexed: true,
         internalType: 'address',
         name: 'contributor',

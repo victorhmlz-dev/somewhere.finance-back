@@ -237,6 +237,16 @@ const HANDLERS: Record<string, Handler> = {
     });
   },
 
+  async Cancelled(tx, launch, args, blockTime) {
+    await tx.launch.update({
+      where: { id: launch.id },
+      data: {
+        cancelledAt: blockTime,
+        tokensBurned: (args.tokensBurned as bigint).toString(),
+      },
+    });
+  },
+
   async Claimed(tx, launch, args, blockTime) {
     await tx.launchContribution.updateMany({
       where: {
