@@ -25,6 +25,8 @@ export interface LogContext {
   chainKey: string;
   /** The Launchpad contract being read, in lowercase. */
   launchpad: string;
+  /** The asset launches of this contract are sold for. */
+  quoteAssetId: string;
   source: LogSource;
   blockHash: string;
   blockTime: Date;
@@ -175,6 +177,9 @@ async function createLaunch(
       chainKey: origin.chainKey,
       launchpad: origin.launchpad,
       launchId: origin.launchId,
+      quoteAssetId: context.quoteAssetId,
+      // LaunchToken has 18 decimals
+      tokenDecimals: 18,
       tokenAddress: lower(event.token),
       saleAddress: lower(event.sale),
       vestingAddress: lower(event.vesting),
@@ -265,7 +270,7 @@ const HANDLERS: Record<string, Handler> = {
       BigInt(launch.hardCap.toFixed());
     const purchase = {
       launchId: launch.id,
-      nativeAmount: amount,
+      quoteAmount: amount,
       tokenAmount: tokens.toString(),
       createdAt: blockTime,
       // Reading the chain again does not repeat the notification
@@ -298,9 +303,10 @@ const HANDLERS: Record<string, Handler> = {
       data: {
         finalizedAt: blockTime,
         pairAddress: lower(args.pair as string),
-        liquidityNative: (args.liquidityNative as bigint).toString(),
+        // The v2 contract names the quote asset "native"
+        liquidityQuote: (args.liquidityNative as bigint).toString(),
         liquidityTokens: (args.liquidityTokens as bigint).toString(),
-        creatorNative: (args.creatorNative as bigint).toString(),
+        creatorQuote: (args.creatorNative as bigint).toString(),
         fee: (args.fee as bigint).toString(),
         tokensBurned: (args.tokensBurned as bigint).toString(),
       },
@@ -354,7 +360,7 @@ const HANDLERS: Record<string, Handler> = {
     await tx.launch.update({
       where: { id: launch.id },
       data: {
-        vestingReleasedNative: {
+        vestingReleasedQuote: {
           increment: (args.nativeAmount as bigint).toString(),
         },
         vestingReleasedTokens: {

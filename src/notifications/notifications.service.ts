@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import type { Page } from '../common/pagination.js';
-import type { Env } from '../config/env.js';
+import { type AssetView, toAssetView } from '../assets/asset-view.js';
 import { Prisma } from '../generated/prisma/client.js';
 import type {
   NotificationType,
@@ -43,10 +42,11 @@ export interface NotificationView {
   /** The emoji of a `reaction`. */
   reaction: ReactionKind | null;
   /**
-   * What one purchase paid, in wei, and the tokens it bought. Null for
-   * several purchases told together, and for anything else.
+   * What one purchase paid, in the smallest unit of the launch's quote
+   * asset, and the tokens it bought. Null for several purchases told
+   * together, and for anything else.
    */
-  purchase: { nativeAmount: string; tokenAmount: string } | null;
+  purchase: { quoteAmount: string; tokenAmount: string } | null;
   /** When the most recent actor did it. */
   createdAt: string;
   isUnread: boolean;
@@ -58,8 +58,9 @@ export interface NotificationLaunchView {
   name: string;
   symbol: string;
   image: string | null;
-  /** The currency it is bought with, e.g. "ETH". */
-  nativeSymbol: string;
+  tokenDecimals: number;
+  /** What it is bought with: a currency, a stablecoin, a tokenized stock… */
+  quoteAsset: AssetView;
 }
 
 interface NotificationGroup {
@@ -71,7 +72,7 @@ interface NotificationGroup {
   actor_ids: string[];
   actor_address: string | null;
   actor_count: number;
-  native_amount: string | null;
+  quote_amount: string | null;
   token_amount: string | null;
   created_at: Date;
   is_unread: boolean;
@@ -104,19 +105,10 @@ const TAB_FILTER: Record<NotificationTab, Prisma.Sql> = {
 
 @Injectable()
 export class NotificationsService {
-  private readonly nativeSymbols: Map<string, string>;
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly posts: PostsService,
-    config: ConfigService<Env, true>,
-  ) {
-    this.nativeSymbols = new Map(
-      config
-        .get('EVM_CHAINS', { infer: true })
-        .map((chain) => [chain.key, chain.nativeSymbol]),
-    );
-  }
+  ) {}
 
   /** Newest first. A group is as recent as the last thing that joined it. */
   async list(
@@ -141,8 +133,8 @@ export class NotificationsService {
           ))[1:3] AS actor_ids,
           (array_agg(n.actor_address ORDER BY n.id DESC))[1] AS actor_address,
           count(*)::int AS actor_count,
-          (array_agg(n.native_amount::text ORDER BY n.id DESC))[1]
-            AS native_amount,
+          (array_agg(n.quote_amount::text ORDER BY n.id DESC))[1]
+            AS quote_amount,
           (array_agg(n.token_amount::text ORDER BY n.id DESC))[1]
             AS token_amount,
           max(n.created_at) AS created_at,
@@ -166,7 +158,13 @@ export class NotificationsService {
         where: {
           id: { in: pageGroups.flatMap((group) => group.launch_id ?? []) },
         },
-        select: { id: true, chainKey: true, name: true, symbol: true },
+        select: {
+          id: true,
+          name: true,
+          symbol: true,
+          tokenDecimals: true,
+          quoteAsset: true,
+        },
       }),
       this.prisma.launchProfile.findMany({
         where: {
@@ -213,14 +211,15 @@ export class NotificationsService {
               name: launch.name,
               symbol: launch.symbol,
               image: imageOf.get(launch.id) ?? null,
-              nativeSymbol: this.nativeSymbols.get(launch.chainKey) ?? 'ETH',
+              tokenDecimals: launch.tokenDecimals,
+              quoteAsset: toAssetView(launch.quoteAsset),
             }
           : null,
         reaction: group.reaction,
         purchase:
-          single && group.native_amount && group.token_amount
+          single && group.quote_amount && group.token_amount
             ? {
-                nativeAmount: group.native_amount,
+                quoteAmount: group.quote_amount,
                 tokenAmount: group.token_amount,
               }
             : null,

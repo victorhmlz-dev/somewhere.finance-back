@@ -199,6 +199,12 @@ Implicaciones:
 5. Los NFFC se comunican como indica la sección 2.
 6. Los contratos van en un proyecto aparte, `somewhere.finance-contracts`, no en el backend.
 7. Orden de lo cripto (acordado el 2026-10-11): primero los tokens fungibles (Launchpad, después Parabolic, después Trust Graph). Subastas, compraventa de NFT y NFFC quedan pendientes para después. Se empieza por EVM en testnet; Solana será un proyecto aparte.
+8. **Multired y RWA, requisito vital (2026-10-15).** Nada en el stack puede asumir Ethereum ni la moneda nativa: Somewhere trabaja en todas las redes y entre redes ("a través de todos los mundos"), incluidas las no EVM como Solana, y usa RWA. Los tokens se pueden emparejar con cualquier activo permitido, incluidas acciones tokenizadas. Las redes se modelan por familia (evm, solana…) y los activos explícitamente (red, dirección o mint, símbolo, decimales, tipo).
+9. **Fábrica al estilo long.xyz con las reglas de Somewhere (2026-10-15), opción B:** contratos propios que copian el concepto, no el código. Se adoptan la reserva de ticker y la validación de fábrica oficial; la subasta dinámica, más adelante, como alternativa a la curva de Parabolic. Referencias revisadas: long.xyz (Robinhood Chain, sobre Doppler y Uniswap v4) y StonkFun (Solana, sobre Raydium LaunchLab).
+10. **Acciones tokenizadas de Robinhood verificadas en la red (2026-10-15):** ERC-20 de 18 decimales tras un beacon proxy actualizable (`0xe10b6f6B275de231345c20D14Ab812db62151b00`, que es también el registro de acceso). Sin lista blanca: un contrato nuevo puede recibirlas (transferencia simulada con éxito, y muchos contratos ya las custodian). Riesgos del emisor: lista negra por dirección, pausa global y cambio de implementación en cualquier momento. Si bloquea o pausa durante una venta, ni el listado ni los reembolsos funcionarían: hay que tratarlo en el diseño de la v3 y mostrarlo en la puntuación de seguridad.
+11. **Billetera (2026-10-15):** solución del mercado (Privy, Dynamic o Turnkey), no custodial, conviviendo con MetaMask, Phantom y demás wallets externas, con varias wallets por cuenta. Proveedor por elegir.
+11b. **Proveedor de billetera elegido: Privy (2026-10-16).** Falta el App ID de la cuenta del usuario para integrarlo.
+12. **Verificación por niveles (2026-10-15):** como en la evaluación de riesgos (mirar, social, comprar, crear). Somewhere no guarda información sensible: igual que las claves de las wallets, la verificación la hacen terceros y la API solo guarda el resultado.
 
 ## 6. Siguiente trabajo
 
@@ -235,6 +241,16 @@ Valoración que se le dio al usuario cuando la pidió. Es material interno, escr
 - **Problema de diseño:** el contenido es naturalmente fungible; hacerlo único fragmenta la liquidez, y si es redimible su precio converge al valor neto.
 - **Sugerencias:** que lo único sea la curación del creador con historial público; decidir pronto si es redimible; mirar ERC-6551 como base técnica.
 - Nada de esto bloquea el backend off-chain.
+
+## 7b. Multired en el back y el front (2026-10-16)
+
+Primer paso del requisito vital de la decisión 8:
+
+- Configuración `CHAINS` por familias (`evm`, `solana`), cada red con su moneda nativa (`symbol`, `name`, `decimals`). `EVM_CHAINS` se sigue leyendo. Solo las redes EVM con `launchpad` se indexan.
+- Tabla `assets` (red, dirección o mint, símbolo, decimales, tipo: native, crypto, stablecoin, stock, rwa, emisor). Cada lanzamiento apunta a su `quoteAsset` y guarda `tokenDecimals`. Las columnas "native" pasaron a "quote" (`liquidity_quote`, `creator_quote`, `vesting_released_quote`, `quote_amount` en notificaciones), con migración que renombra sin borrar.
+- El front lee cada importe con los decimales de su activo (`lib/chain/amounts.js`: `formatQuote`, `formatTokens`) y el formulario de creación tiene "Paired with".
+- Los tests e2e ya no leen las redes del `.env`.
+- Siguiente: contrato v3 con el activo del par como parámetro (lista de activos permitidos por red, acciones tokenizadas incluidas), luego Privy.
 
 ## 8. Riesgos de producción
 

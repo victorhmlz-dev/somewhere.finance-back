@@ -1,5 +1,11 @@
-import type { EvmChainConfig } from '../config/evm-chains.js';
+import { type AssetView, toAssetView } from '../assets/asset-view.js';
 import type {
+  ChainConfig,
+  ChainFamily,
+  NativeCurrency,
+} from '../config/chains.js';
+import type {
+  Asset,
   Launch,
   LaunchContribution,
   LaunchProfile,
@@ -15,22 +21,32 @@ import {
 /** A chain as the front needs it to show launches and to send transactions. */
 export interface ChainView {
   key: string;
-  chainId: number;
+  family: ChainFamily;
+  /** For EVM chains. Null on other families. */
+  chainId: number | null;
   name: string;
-  nativeSymbol: string;
+  /** What the chain pays its fees in. */
+  nativeCurrency: NativeCurrency;
   /** Address of the Launchpad contract, where launches are created. */
-  launchpad: string;
+  launchpad: string | null;
 }
 
-export function toChainView(chain: EvmChainConfig): ChainView {
+export function toChainView(chain: ChainConfig): ChainView {
   return {
     key: chain.key,
-    chainId: chain.chainId,
+    family: chain.family,
+    chainId: chain.family === 'evm' ? chain.chainId : null,
     name: chain.name,
-    nativeSymbol: chain.nativeSymbol,
-    launchpad: chain.launchpad,
+    nativeCurrency: chain.nativeCurrency,
+    launchpad: chain.family === 'evm' ? chain.launchpad : null,
   };
 }
+
+/** A launch row with the asset it is sold for. */
+export type LaunchRow = Launch & { quoteAsset: Asset };
+
+/** What has to be loaded with a launch to build its view. */
+export const LAUNCH_INCLUDE = { quoteAsset: true } as const;
 
 /** What the viewer put into a launch and what they got back. */
 export interface ContributionView {
@@ -43,8 +59,9 @@ export interface ContributionView {
 }
 
 /**
- * A token launch. Every amount is a string in the smallest unit (wei for the
- * native currency, 18 decimals for the token): they do not fit in a number.
+ * A token launch. Every amount is an integer in text, in the smallest unit of
+ * its asset: `quoteAsset.decimals` for what is paid (caps, contributions,
+ * raise), `tokenDecimals` for the token. Nothing here assumes a currency.
  */
 export interface LaunchView {
   id: string;
@@ -62,6 +79,9 @@ export interface LaunchView {
   status: LaunchStatus;
   creator: { address: string; user: UserSummary | null };
 
+  /** What the token is sold for and paired with. */
+  quoteAsset: AssetView;
+  tokenDecimals: number;
   tokenAddress: string;
   /** The contract to contribute to, claim from and ask for refunds. */
   saleAddress: string;
@@ -95,9 +115,9 @@ export interface LaunchView {
   listing: {
     listedAt: string;
     pairAddress: string;
-    liquidityNative: string;
+    liquidityQuote: string;
     liquidityTokens: string;
-    creatorNative: string;
+    creatorQuote: string;
     fee: string;
     tokensBurned: string;
   } | null;
@@ -132,8 +152,8 @@ export function toContributionView(
 }
 
 export function toLaunchView(
-  launch: Launch,
-  chain: EvmChainConfig,
+  launch: LaunchRow,
+  chain: ChainConfig,
   creatorUser: UserSummary | null,
   myContributions: LaunchContribution[],
   profile: LaunchProfile | null,
@@ -160,6 +180,8 @@ export function toLaunchView(
     detailsSetAt: profile?.detailsSetAt.toISOString() ?? null,
     status: launchStatus(timeline, now),
     creator: { address: launch.creatorAddress, user: creatorUser },
+    quoteAsset: toAssetView(launch.quoteAsset),
+    tokenDecimals: launch.tokenDecimals,
     tokenAddress: launch.tokenAddress,
     saleAddress: launch.saleAddress,
     vestingAddress: launch.vestingAddress,
@@ -184,9 +206,9 @@ export function toLaunchView(
         ? {
             listedAt: launch.finalizedAt.toISOString(),
             pairAddress: launch.pairAddress,
-            liquidityNative: launch.liquidityNative?.toFixed() ?? '0',
+            liquidityQuote: launch.liquidityQuote?.toFixed() ?? '0',
             liquidityTokens: launch.liquidityTokens?.toFixed() ?? '0',
-            creatorNative: launch.creatorNative?.toFixed() ?? '0',
+            creatorQuote: launch.creatorQuote?.toFixed() ?? '0',
             fee: launch.fee?.toFixed() ?? '0',
             tokensBurned: launch.tokensBurned?.toFixed() ?? '0',
           }

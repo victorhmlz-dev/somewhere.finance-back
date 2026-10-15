@@ -13,7 +13,7 @@ describe('validateEnv', () => {
       FRONT_URL: 'http://localhost:3000',
       PUBLIC_API_URL: 'http://localhost:3001/api',
       JWT_EXPIRES_IN_SECONDS: 604800,
-      EVM_CHAINS: [],
+      CHAINS: [],
       INDEXER_POLL_MS: 4000,
       UPLOAD_DIR: 'uploads',
       UPLOAD_DAILY_LIMIT: 30,

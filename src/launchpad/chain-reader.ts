@@ -1,5 +1,5 @@
 import { createPublicClient, http, type Hex } from 'viem';
-import type { EvmChainConfig } from '../config/evm-chains.js';
+import type { LaunchpadChainConfig } from '../config/chains.js';
 
 /** A contract event as the chain stores it, before decoding. */
 export interface ChainLog {
@@ -29,7 +29,7 @@ export interface ChainReader {
   }): Promise<ChainLog[]>;
 }
 
-export type ChainReaderFactory = (chain: EvmChainConfig) => ChainReader;
+export type ChainReaderFactory = (chain: LaunchpadChainConfig) => ChainReader;
 
 /** Token under which the factory is provided, so tests can swap it. */
 export const CHAIN_READER_FACTORY = Symbol('CHAIN_READER_FACTORY');

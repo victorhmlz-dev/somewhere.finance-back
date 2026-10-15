@@ -8,7 +8,8 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { BaseError, type Hex } from 'viem';
 import type { Env } from '../config/env.js';
-import type { EvmChainConfig } from '../config/evm-chains.js';
+import { AssetsService } from '../assets/assets.service.js';
+import { hasLaunchpad, type LaunchpadChainConfig } from '../config/chains.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   CHAIN_READER_FACTORY,
@@ -40,7 +41,7 @@ const byPosition = (a: ChainLog, b: ChainLog) =>
  * What went wrong, without the node URL: it usually carries the API key of
  * the provider, and logs are read by more people than the .env file.
  */
-function describeError(error: unknown, chain: EvmChainConfig): string {
+function describeError(error: unknown, chain: LaunchpadChainConfig): string {
   const message =
     error instanceof BaseError
       ? [error.shortMessage, error.details].filter(Boolean).join(' ')
@@ -72,12 +73,16 @@ export class LaunchIndexerService
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<Env, true>,
+    private readonly assets: AssetsService,
     @Inject(CHAIN_READER_FACTORY)
     private readonly createReader: ChainReaderFactory,
   ) {}
 
   onApplicationBootstrap() {
-    const chains = this.config.get('EVM_CHAINS', { infer: true });
+    // Only EVM chains with a Launchpad have launches to read for now
+    const chains = this.config
+      .get('CHAINS', { infer: true })
+      .filter(hasLaunchpad);
     for (const chain of chains) {
       this.logger.log(`Indexing the launchpad of ${chain.key}`);
       this.poll(chain, this.createReader(chain));
@@ -90,7 +95,10 @@ export class LaunchIndexerService
   }
 
   /** Reads everything new on one chain. Returns how many blocks it read. */
-  async sync(chain: EvmChainConfig, reader: ChainReader): Promise<number> {
+  async sync(
+    chain: LaunchpadChainConfig,
+    reader: ChainReader,
+  ): Promise<number> {
     const cursor = await this.prisma.chainCursor.findUnique({
       where: { chainKey: chain.key },
     });
@@ -143,7 +151,9 @@ export class LaunchIndexerService
    * Applies details that arrived while their launch was being indexed, which
    * the indexer could not see then, and forgets the ones that waited too long.
    */
-  private async settlePendingDetails(chain: EvmChainConfig): Promise<void> {
+  private async settlePendingDetails(
+    chain: LaunchpadChainConfig,
+  ): Promise<void> {
     const now = new Date();
     await this.prisma.pendingLaunchDetails.deleteMany({
       where: {
@@ -171,7 +181,7 @@ export class LaunchIndexerService
   }
 
   private async indexRange(
-    chain: EvmChainConfig,
+    chain: LaunchpadChainConfig,
     reader: ChainReader,
     fromBlock: bigint,
     toBlock: bigint,
@@ -225,6 +235,7 @@ export class LaunchIndexerService
       });
     }
 
+    const nativeAsset = await this.assets.nativeOf(chain.key);
     await this.prisma.$transaction(
       async (tx) => {
         for (const log of logs) {
@@ -236,6 +247,8 @@ export class LaunchIndexerService
             {
               chainKey: chain.key,
               launchpad: chain.launchpad,
+              // The v2 Launchpad sells every token for the chain's currency
+              quoteAssetId: nativeAsset.id,
               source,
               blockHash: block.hash,
               blockTime: block.time,
@@ -260,7 +273,7 @@ export class LaunchIndexerService
   }
 
   /** Syncs now and again after every pause, for as long as the app runs. */
-  private poll(chain: EvmChainConfig, reader: ChainReader) {
+  private poll(chain: LaunchpadChainConfig, reader: ChainReader) {
     const pollMs = this.config.get('INDEXER_POLL_MS', { infer: true });
     const run = async () => {
       try {

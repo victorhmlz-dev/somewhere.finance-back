@@ -2,7 +2,8 @@ import { getAddress } from 'viem';
 
 /**
  * The token list format wallets and exchanges import (tokenlists.org, by
- * Uniswap). Only the fields this API fills in.
+ * Uniswap). It is a format for EVM chains, identified by chain id; tokens of
+ * other families need other lists. Only the fields this API fills in.
  */
 export interface TokenList {
   name: string;
@@ -19,9 +20,6 @@ export interface TokenList {
   }[];
 }
 
-/** Every launch token has 18 decimals, as `LaunchToken` does. */
-const DECIMALS = 18;
-
 // What the format accepts for a token's name and symbol. A launch can be
 // created with anything, so the few that do not fit are left out.
 const NAME_PATTERN = /^[ \S]{1,60}$/u;
@@ -34,6 +32,7 @@ interface ListedLaunch {
   symbol: string;
   /** Set by the creator, if they did. */
   imageUrl: string | null;
+  tokenDecimals: number;
 }
 
 /**
@@ -53,7 +52,7 @@ export function toTokenList(launches: ListedLaunch[], now: Date): TokenList {
       address: getAddress(launch.tokenAddress),
       name: launch.name,
       symbol: launch.symbol,
-      decimals: DECIMALS,
+      decimals: launch.tokenDecimals,
       ...(launch.imageUrl ? { logoURI: launch.imageUrl } : {}),
     }));
 

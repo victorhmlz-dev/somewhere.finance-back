@@ -2,6 +2,7 @@ import { Module, ValidationPipe } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { AssetsModule } from './assets/assets.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { MINUTE_MS, RATE_LIMITS } from './common/rate-limits.js';
 import { type Env, validateEnv } from './config/env.js';
@@ -29,6 +30,7 @@ import { UsersModule } from './users/users.module.js';
       }),
     }),
     PrismaModule,
+    AssetsModule,
     AuthModule,
     HealthModule,
     UsersModule,

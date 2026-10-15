@@ -13,3 +13,7 @@ process.env.DATABASE_URL = testDatabaseUrl();
 process.env.UPLOAD_DIR = mkdtempSync(join(tmpdir(), 'somewhere-test-uploads-'));
 // Request limits are tested on their own; elsewhere they would get in the way
 process.env.RATE_LIMIT_ENABLED = 'false';
+// No networks from the .env: tests never read real chains nor spend the
+// node's quota. A test that needs a chain sets CHAINS itself.
+process.env.CHAINS = '';
+process.env.EVM_CHAINS = '';

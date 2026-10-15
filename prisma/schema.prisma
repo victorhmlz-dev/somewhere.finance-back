@@ -212,8 +212,9 @@ model Notification {
   // For what an event on chain caused: "<chain>:<transaction>:<log index>".
   sourceKey    String?          @map("source_key") @db.VarChar(120)
   reaction     ReactionKind?
-  // For a purchase: what was paid, in wei, and the tokens it bought.
-  nativeAmount Decimal?         @map("native_amount") @db.Decimal(78, 0)
+  // For a purchase: what was paid, in the smallest unit of the launch's
+  // quote asset, and the tokens it bought.
+  quoteAmount  Decimal?         @map("quote_amount") @db.Decimal(78, 0)
   tokenAmount  Decimal?         @map("token_amount") @db.Decimal(78, 0)
   createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   readAt       DateTime?        @map("read_at") @db.Timestamptz(3)
@@ -335,6 +336,12 @@ model Launch {
   // Number of the launch inside its Launchpad contract.
   launchId  Int    @map("launch_id")
 
+  // What the token is sold for and paired with: the chain's own currency, a
+  // stablecoin, a tokenized stock… Every amount of the sale is in it.
+  quoteAssetId  String @map("quote_asset_id") @db.Uuid
+  // Decimals of the token launched.
+  tokenDecimals Int    @default(18) @map("token_decimals")
+
   // Addresses are stored in lowercase.
   tokenAddress   String @map("token_address") @db.VarChar(42)
   saleAddress    String @map("sale_address") @db.VarChar(42)
@@ -366,9 +373,9 @@ model Launch {
   // Set when the sale is finalized.
   finalizedAt     DateTime? @map("finalized_at") @db.Timestamptz(0)
   pairAddress     String?   @map("pair_address") @db.VarChar(42)
-  liquidityNative Decimal?  @map("liquidity_native") @db.Decimal(78, 0)
+  liquidityQuote  Decimal?  @map("liquidity_quote") @db.Decimal(78, 0)
   liquidityTokens Decimal?  @map("liquidity_tokens") @db.Decimal(78, 0)
-  creatorNative   Decimal?  @map("creator_native") @db.Decimal(78, 0)
+  creatorQuote    Decimal?  @map("creator_quote") @db.Decimal(78, 0)
   fee             Decimal?  @db.Decimal(78, 0)
   tokensBurned    Decimal?  @map("tokens_burned") @db.Decimal(78, 0)
   feeCollectedAt  DateTime? @map("fee_collected_at") @db.Timestamptz(0)
@@ -378,7 +385,7 @@ model Launch {
   cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(0)
 
   // What the creator's vesting has paid out so far.
-  vestingReleasedNative Decimal @default(0) @map("vesting_released_native") @db.Decimal(78, 0)
+  vestingReleasedQuote  Decimal @default(0) @map("vesting_released_quote") @db.Decimal(78, 0)
   vestingReleasedTokens Decimal @default(0) @map("vesting_released_tokens") @db.Decimal(78, 0)
 
   // Where and when the launch was created on chain.
@@ -387,6 +394,7 @@ model Launch {
   createdTxHash String   @map("created_tx_hash") @db.VarChar(66)
 
   contributions LaunchContribution[]
+  quoteAsset    Asset                @relation(fields: [quoteAssetId], references: [id], onDelete: Restrict)
 
   @@unique([chainKey, launchpad, launchId])
   @@index([chainKey, saleAddress])
@@ -469,4 +477,45 @@ model Upload {
   @@index([userId, createdAt])
   @@index([fileName])
   @@map("uploads")
+}
+
+/**
+ * What an asset is, for showing it and for the rules that apply to it.
+ */
+enum AssetKind {
+  // The currency a chain pays fees in: ETH, BNB, SOL…
+  native
+  crypto
+  stablecoin
+  // A tokenized share, like the Robinhood stock tokens
+  stock
+  // Any other real-world asset: gold, bonds, funds…
+  rwa
+}
+
+/**
+ * An asset on one chain: a currency, a token, a tokenized stock. Amounts in
+ * the API are integers in the smallest unit of their asset, and its decimals
+ * say how to read them; nothing assumes 18 decimals or one currency.
+ */
+model Asset {
+  id       String    @id @default(uuid(7)) @db.Uuid
+  chainKey String    @map("chain_key") @db.VarChar(32)
+  // "native" for the chain's own currency. Otherwise the token's address:
+  // in lowercase on EVM chains, as it is (base58) for a Solana mint.
+  address  String    @db.VarChar(64)
+  symbol   String    @db.VarChar(32)
+  name     String    @db.VarChar(100)
+  decimals Int
+  kind     AssetKind
+  // Who issues it, for stocks and other real-world assets.
+  issuer   String?   @db.VarChar(100)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  launches Launch[]
+
+  @@unique([chainKey, address])
+  @@map("assets")
 }

@@ -1,4 +1,4 @@
-import { type EvmChainConfig, parseEvmChains } from './evm-chains.js';
+import { type ChainConfig, parseChains } from './chains.js';
 
 export interface Env {
   PORT: number;
@@ -8,8 +8,8 @@ export interface Env {
   DATABASE_URL: string;
   JWT_SECRET: string;
   JWT_EXPIRES_IN_SECONDS: number;
-  /** Chains the launchpad is read from. Empty when none is configured. */
-  EVM_CHAINS: EvmChainConfig[];
+  /** The networks Somewhere works with, of every family. Empty for none. */
+  CHAINS: ChainConfig[];
   /** How often each chain is checked for new blocks. */
   INDEXER_POLL_MS: number;
   /** Folder uploaded images are kept in. */
@@ -99,7 +99,7 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     DATABASE_URL: databaseUrl,
     JWT_SECRET: jwtSecret,
     JWT_EXPIRES_IN_SECONDS: jwtExpiresIn,
-    EVM_CHAINS: parseEvmChains(raw.EVM_CHAINS),
+    CHAINS: parseChains(raw.CHAINS, raw.EVM_CHAINS),
     INDEXER_POLL_MS: indexerPollMs,
     UPLOAD_DIR: uploadDir,
     UPLOAD_DAILY_LIMIT: uploadDailyLimit,

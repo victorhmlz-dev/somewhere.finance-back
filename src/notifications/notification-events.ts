@@ -16,8 +16,11 @@ export interface NotificationEvent {
   /** The launch involved, for purchases, comments and reactions to it. */
   launchId?: string;
   reaction?: ReactionKind;
-  /** For a purchase: wei paid and tokens bought, as integers in text. */
-  nativeAmount?: string;
+  /**
+   * For a purchase: what was paid, in the smallest unit of the launch's
+   * quote asset, and the tokens bought, as integers in text.
+   */
+  quoteAmount?: string;
   tokenAmount?: string;
   /** When it happened, if not now: a purchase happened in its block. */
   createdAt?: Date;

@@ -181,8 +181,8 @@ Una notificación tiene esta forma:
 ```
 
 - `type` es `like`, `repost`, `follow`, `mention`, `reply`, `launch_purchase` (alguien compró tu token), `purchase` (compraste un token), `launch_comment` (alguien comentó tu lanzamiento) o `reaction` (alguien reaccionó a tu post o a tu lanzamiento).
-- `launch` es `{ id, name, symbol, image, nativeSymbol }` en las notificaciones de compras, comentarios y reacciones a un lanzamiento. `reaction` es el emoji de una `reaction`.
-- `purchase` es `{ nativeAmount, tokenAmount }` (en la unidad mínima) para una sola compra. Las compras de un mismo día a un lanzamiento se agrupan como los likes y entonces no llevan importes.
+- `launch` es `{ id, name, symbol, image, tokenDecimals, quoteAsset }` en las notificaciones de compras, comentarios y reacciones a un lanzamiento. `reaction` es el emoji de una `reaction`.
+- `purchase` es `{ quoteAmount, tokenAmount }` (en la unidad mínima) para una sola compra. Las compras de un mismo día a un lanzamiento se agrupan como los likes y entonces no llevan importes.
 - Una compra hecha desde una wallet sin perfil de Somewhere no tiene `actors`: trae la dirección en `actorAddress`. Una `purchase` tampoco tiene `actors`: la hizo quien la recibe.
 - Las compras se notifican con la fecha de su bloque, no con la de cuando el indexador las leyó.
 - `actors` trae hasta tres usuarios, del más reciente al más antiguo, y `otherActorCount` cuántos más hay: "Aria, Yuki y 12 más".
@@ -212,7 +212,7 @@ Filtros de la lista: `chain` (clave de la cadena), `status` (`upcoming`, `live` 
 
 Sobre la respuesta:
 
-- **Los importes son cadenas de texto** en la unidad mínima (wei para la moneda nativa, 18 decimales para el token), porque no caben en un número.
+- **Los importes son cadenas de texto** en la unidad mínima de su activo, porque no caben en un número: los de la venta (topes, aportaciones, lo recaudado) en el de `quoteAsset`, con sus `decimals`; los del token con `tokenDecimals`. Nada supone 18 decimales ni una moneda.
 - `status` es `upcoming`, `live`, `succeeded`, `failed`, `finalized` o `cancelled`, calculado en cada petición con la misma lógica que el contrato: una venta cambia de estado al pasar el tiempo, sin que haya ningún evento.
 - `cancelledAt` indica cuándo el creador canceló la venta, algo que solo puede hacer antes de que empiece. El filtro `ended` incluye las canceladas.
 - `finalizeBy` indica hasta cuándo se puede listar una venta exitosa. Pasado ese plazo de 7 días la venta pasa a fallida.
@@ -232,34 +232,51 @@ Sobre la respuesta:
 
 ### Configurar las cadenas
 
-`EVM_CHAINS` es una lista JSON con las cadenas a leer. Vacía, la API funciona sin Launchpad.
+Somewhere trabaja con todas las redes, y nada en la API puede asumir una red, una familia de redes ni una moneda. `CHAINS` es una lista JSON con las redes; cada una dice de qué familia es (`evm` o `solana`) y con qué moneda paga sus comisiones. Vacía, la API funciona sin Launchpad.
 
 ```json
 [{
   "key": "sepolia",
+  "family": "evm",
   "chainId": 11155111,
   "name": "Sepolia",
-  "nativeSymbol": "ETH",
+  "nativeCurrency": { "symbol": "ETH", "name": "Ether", "decimals": 18 },
   "rpcUrl": "https://…",
   "launchpad": "0x…",
   "startBlock": 0,
   "confirmations": 5,
   "logBlockRange": 10
+}, {
+  "key": "solana-devnet",
+  "family": "solana",
+  "cluster": "devnet",
+  "name": "Solana Devnet",
+  "nativeCurrency": { "symbol": "SOL", "name": "Solana", "decimals": 9 },
+  "rpcUrl": "https://api.devnet.solana.com"
 }]
 ```
+
+- El formato anterior, `EVM_CHAINS` con `nativeSymbol`, se sigue leyendo como redes EVM con 18 decimales. No se pueden usar las dos variables a la vez.
+- Solo las redes EVM con `launchpad` tienen lanzamientos que leer por ahora; una red de Solana se puede configurar, pero aún no tiene launchpad.
 
 - `launchpad` es la dirección del contrato desplegado y `startBlock` el bloque en que se desplegó.
 - `confirmations` es cuántos bloques espera el indexador antes de leer uno. Lo que el indexador lee no lo deshace, así que en una red real tiene que ser lo bastante alto para que el bloque ya no pueda cambiar. Solo una cadena local admite `0`.
 - `logBlockRange` es cuántos bloques pide el indexador al nodo de una vez (por defecto 2000). Los planes gratuitos de los proveedores lo limitan: en Alchemy gratis, a 10.
 - Si una cadena reemplaza un bloque ya leído, el indexador se detiene y lo dice en el log.
-- El indexador recuerda qué contrato `Launchpad` leyó. Si `EVM_CHAINS` pasa a nombrar otro para la misma cadena, lee el nuevo desde su `startBlock` sin borrar nada: los lanzamientos del anterior se quedan en la base de datos, sin mostrarse, con todo lo que la gente añadió. Cambiar de contrato no requiere `launchpad:reset`.
+- Los errores del indexador no muestran la URL del nodo, porque suele llevar la API key del proveedor.
+- El indexador recuerda qué contrato `Launchpad` leyó. Si `CHAINS` pasa a nombrar otro para la misma cadena, lee el nuevo desde su `startBlock` sin borrar nada: los lanzamientos del anterior se quedan en la base de datos, sin mostrarse, con todo lo que la gente añadió. Cambiar de contrato no requiere `launchpad:reset`.
 
 ### Lo que la gente añade nunca se pierde al releer la cadena
 
 La tabla `launches` es una copia de la cadena: se puede borrar y volver a leer. Lo que la gente añade sobre un lanzamiento vive aparte y lo apunta por su id: la descripción y la imagen (`launch_profiles`), los comentarios (`posts.launch_id`), las reacciones y las notificaciones. Ninguna de esas tablas tiene clave foránea hacia `launches`, así que borrar la copia no las toca.
 
 El id de un lanzamiento sale de la propia cadena (`src/launchpad/launch-id.ts`): un UUIDv7 con la hora de su bloque, su número y un hash de cadena, contrato y número. Releer la cadena le da el mismo id, y todo lo añadido vuelve a encontrarlo. Las notificaciones de compra guardan la clave de su evento (`source_key`), así que releer la cadena no las repite. Hay un test que borra la copia, la vuelve a leer y comprueba que descripción, imagen, comentarios, reacciones y notificaciones siguen igual.
-- Los errores del indexador no muestran la URL del nodo, porque suele llevar la API key del proveedor.
+
+### Activos
+
+Cada importe está en un activo, y solo el activo sabe cuántos decimales tiene: 18 el ETH, 6 el USDC, 9 el SOL, lo que use una acción tokenizada. La tabla `assets` guarda cada activo de cada red: dirección (o mint en Solana; `native` para la moneda propia de la red), símbolo, nombre, decimales y tipo (`native`, `crypto`, `stablecoin`, `stock` o `rwa`, con su emisor). La API registra al arrancar la moneda nativa de cada red configurada.
+
+Cada lanzamiento dice con qué activo se compra y se empareja (`quoteAsset`) y cuántos decimales tiene su token (`tokenDecimals`). El Launchpad actual vende siempre por la moneda de la red; uno posterior aceptará una lista de activos permitidos, incluidas acciones tokenizadas. `GET /api/launches/chains` devuelve, por red, los activos con los que se puede lanzar (`quoteAssets`).
 
 ### Desarrollo con una cadena local
 

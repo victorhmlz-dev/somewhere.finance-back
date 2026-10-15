@@ -10,7 +10,7 @@ import ajvFormatsModule from 'ajv-formats';
 import sharp from 'sharp';
 import { getAddress, parseEther, type Hex } from 'viem';
 import type { App } from 'supertest/types.js';
-import type { EvmChainConfig } from '../src/config/evm-chains.js';
+import type { LaunchpadChainConfig } from '../src/config/chains.js';
 import {
   creatorVestingEvents,
   launchpadEvents,
@@ -50,11 +50,11 @@ describe('Launchpad (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   let indexer: LaunchIndexerService;
-  let chainConfig: EvmChainConfig;
+  let chainConfig: LaunchpadChainConfig;
   let chain: FakeChain;
   const createdAddresses: string[] = [];
   const previousEnv = {
-    EVM_CHAINS: process.env.EVM_CHAINS,
+    CHAINS: process.env.CHAINS,
     INDEXER_POLL_MS: process.env.INDEXER_POLL_MS,
     UPLOAD_DIR: process.env.UPLOAD_DIR,
     PUBLIC_API_URL: process.env.PUBLIC_API_URL,
@@ -184,12 +184,13 @@ describe('Launchpad (e2e)', () => {
   const uniqueSymbol = () => `T${randomBytes(4).toString('hex').toUpperCase()}`;
 
   beforeAll(async () => {
-    process.env.EVM_CHAINS = JSON.stringify([
+    process.env.CHAINS = JSON.stringify([
       {
         key: chainKey,
+        family: 'evm',
         chainId: 31337,
         name: 'Test chain',
-        nativeSymbol: 'TST',
+        nativeCurrency: { symbol: 'TST', name: 'Test coin', decimals: 18 },
         rpcUrl: 'http://127.0.0.1:1',
         launchpad,
         startBlock: 0,
@@ -218,9 +219,10 @@ describe('Launchpad (e2e)', () => {
     indexer = app.get(LaunchIndexerService);
     chainConfig = {
       key: chainKey,
+      family: 'evm',
       chainId: 31337,
       name: 'Test chain',
-      nativeSymbol: 'TST',
+      nativeCurrency: { symbol: 'TST', name: 'Test coin', decimals: 18 },
       rpcUrl: 'http://127.0.0.1:1',
       launchpad,
       startBlock: 0,
@@ -280,11 +282,21 @@ describe('Launchpad (e2e)', () => {
         status: 'live',
         chain: {
           key: chainKey,
+          family: 'evm',
           chainId: 31337,
           name: 'Test chain',
-          nativeSymbol: 'TST',
+          nativeCurrency: { symbol: 'TST', name: 'Test coin', decimals: 18 },
           launchpad,
         },
+        // Sold for the chain's own currency, with its decimals
+        quoteAsset: {
+          chainKey,
+          address: null,
+          symbol: 'TST',
+          decimals: 18,
+          kind: 'native',
+        },
+        tokenDecimals: 18,
         creator: { address: launch.creator, user: null },
         tokenAddress: launch.token,
         saleAddress: launch.sale,
@@ -333,8 +345,8 @@ describe('Launchpad (e2e)', () => {
           listedAt: new Date(
             Math.floor(listedAt.getTime() / 1000) * 1000,
           ).toISOString(),
-          liquidityNative: parseEther('7').toString(),
-          creatorNative: parseEther('2.95').toString(),
+          liquidityQuote: parseEther('7').toString(),
+          creatorQuote: parseEther('2.95').toString(),
           fee: parseEther('0.05').toString(),
         },
       });
@@ -343,7 +355,7 @@ describe('Launchpad (e2e)', () => {
         where: { id: listed.id },
         include: { contributions: { orderBy: { amount: 'desc' } } },
       });
-      expect(row.vestingReleasedNative.toFixed()).toBe(
+      expect(row.vestingReleasedQuote.toFixed()).toBe(
         parseEther('0.24').toString(),
       );
       expect(
@@ -606,10 +618,23 @@ describe('Launchpad (e2e)', () => {
       expect(response.body.items).toEqual([
         {
           key: chainKey,
+          family: 'evm',
           chainId: 31337,
           name: 'Test chain',
-          nativeSymbol: 'TST',
+          nativeCurrency: { symbol: 'TST', name: 'Test coin', decimals: 18 },
           launchpad,
+          // What a launch there can be sold for
+          quoteAssets: [
+            {
+              chainKey,
+              address: null,
+              symbol: 'TST',
+              name: 'Test coin',
+              decimals: 18,
+              kind: 'native',
+              issuer: null,
+            },
+          ],
         },
       ]);
     });
@@ -768,9 +793,13 @@ describe('Launchpad (e2e)', () => {
         type: 'launch_purchase',
         actors: [{ handle: buyer.session.user.handle }],
         actorAddress: null,
-        launch: { symbol, nativeSymbol: 'TST' },
+        launch: {
+          symbol,
+          tokenDecimals: 18,
+          quoteAsset: { symbol: 'TST', decimals: 18 },
+        },
         purchase: {
-          nativeAmount: parseEther('0.5').toString(),
+          quoteAmount: parseEther('0.5').toString(),
           tokenAmount: halfEthTokens,
         },
       });
@@ -787,7 +816,7 @@ describe('Launchpad (e2e)', () => {
           actors: [],
           launch: expect.objectContaining({ symbol }),
           purchase: {
-            nativeAmount: parseEther('0.5').toString(),
+            quoteAmount: parseEther('0.5').toString(),
             tokenAmount: halfEthTokens,
           },
         }),
@@ -1029,7 +1058,7 @@ describe('Launchpad (e2e)', () => {
         } as FakeEvent,
       ]);
       const other = { ...chainConfig, launchpad: otherLaunchpad.toLowerCase() };
-      await indexer.sync(other as EvmChainConfig, chain);
+      await indexer.sync(other as LaunchpadChainConfig, chain);
 
       // Its launch is stored, the previous ones are all still there, and the
       // API keeps showing the configured contract

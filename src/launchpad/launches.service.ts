@@ -10,9 +10,10 @@ import { ReactionsService } from '../reactions/reactions.service.js';
 import { ConfigService } from '@nestjs/config';
 import { type Page, pageArgs } from '../common/pagination.js';
 import type { Env } from '../config/env.js';
-import type { EvmChainConfig } from '../config/evm-chains.js';
+import { type AssetView, toAssetView } from '../assets/asset-view.js';
+import { AssetsService } from '../assets/assets.service.js';
+import { hasLaunchpad, type LaunchpadChainConfig } from '../config/chains.js';
 import type {
-  Launch,
   LaunchContribution,
   LaunchProfile,
   Prisma,
@@ -37,6 +38,8 @@ import {
 } from './launch-details.js';
 import {
   type ChainView,
+  LAUNCH_INCLUDE,
+  type LaunchRow,
   type LaunchView,
   toChainView,
   toLaunchView,
@@ -82,15 +85,17 @@ const REFUSALS: Record<DetailsRefusal, () => Error> = {
 
 @Injectable()
 export class LaunchesService {
-  private readonly chains: Map<string, EvmChainConfig>;
+  private readonly chains: Map<string, LaunchpadChainConfig>;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly uploads: UploadsService,
     private readonly reactions: ReactionsService,
+    private readonly assets: AssetsService,
     config: ConfigService<Env, true>,
   ) {
-    const chains = config.get('EVM_CHAINS', { infer: true });
+    // Launches live on the chains that have a Launchpad
+    const chains = config.get('CHAINS', { infer: true }).filter(hasLaunchpad);
     this.chains = new Map(chains.map((chain) => [chain.key, chain]));
   }
 
@@ -111,9 +116,20 @@ export class LaunchesService {
     };
   }
 
-  /** The chains launches can be created on. */
-  listChains(): { items: ChainView[] } {
-    return { items: [...this.chains.values()].map(toChainView) };
+  /**
+   * The chains launches can be created on, each with the assets a launch
+   * there can be sold for. The current Launchpad sells for the chain's own
+   * currency; a later one will take a list of allowed assets.
+   */
+  async listChains(): Promise<{
+    items: (ChainView & { quoteAssets: AssetView[] })[];
+  }> {
+    const items = [];
+    for (const chain of this.chains.values()) {
+      const native = await this.assets.nativeOf(chain.key);
+      items.push({ ...toChainView(chain), quoteAssets: [toAssetView(native)] });
+    }
+    return { items };
   }
 
   /** Launches of the configured chains, the most recently created first. */
@@ -123,6 +139,7 @@ export class LaunchesService {
   ): Promise<Page<LaunchView>> {
     const now = new Date();
     const rows = await this.prisma.launch.findMany({
+      include: LAUNCH_INCLUDE,
       where: {
         AND: [
           this.configured(query.chain),
@@ -161,6 +178,7 @@ export class LaunchesService {
         tokenAddress: true,
         name: true,
         symbol: true,
+        tokenDecimals: true,
       },
     });
     const profiles = await this.profilesOf(launches.map((launch) => launch.id));
@@ -271,8 +289,11 @@ export class LaunchesService {
     return { description: dto.description, imageUrl: dto.image ?? null };
   }
 
-  private async findConfigured(id: string): Promise<Launch> {
-    const launch = await this.prisma.launch.findUnique({ where: { id } });
+  private async findConfigured(id: string): Promise<LaunchRow> {
+    const launch = await this.prisma.launch.findUnique({
+      where: { id },
+      include: LAUNCH_INCLUDE,
+    });
     const chain = launch ? this.chains.get(launch.chainKey) : undefined;
     if (!launch || chain?.launchpad !== launch.launchpad) {
       throw new NotFoundException('Launch not found');
@@ -290,7 +311,7 @@ export class LaunchesService {
   }
 
   private async toViews(
-    launches: Launch[],
+    launches: LaunchRow[],
     viewerId: string | undefined,
     now: Date,
   ): Promise<LaunchView[]> {
