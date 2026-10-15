@@ -250,7 +250,13 @@ Primer paso del requisito vital de la decisión 8:
 - Tabla `assets` (red, dirección o mint, símbolo, decimales, tipo: native, crypto, stablecoin, stock, rwa, emisor). Cada lanzamiento apunta a su `quoteAsset` y guarda `tokenDecimals`. Las columnas "native" pasaron a "quote" (`liquidity_quote`, `creator_quote`, `vesting_released_quote`, `quote_amount` en notificaciones), con migración que renombra sin borrar.
 - El front lee cada importe con los decimales de su activo (`lib/chain/amounts.js`: `formatQuote`, `formatTokens`) y el formulario de creación tiene "Paired with".
 - Los tests e2e ya no leen las redes del `.env`.
-- Siguiente: contrato v3 con el activo del par como parámetro (lista de activos permitidos por red, acciones tokenizadas incluidas), luego Privy.
+- Siguiente: contrato v3 con el activo del par como parámetro (lista de activos permitidos por red, acciones tokenizadas incluidas).
+
+## 7c. Privy en el front (2026-10-16)
+
+- `@privy-io/react-auth` 3.46.0 (fijada) con los paquetes de Solana que pide. `components/providers/AppProviders.jsx` envuelve la app con `PrivyProvider`: email o wallet (MetaMask, Phantom, Coinbase, WalletConnect para EVM, extensiones detectadas), y billetera embebida EVM y Solana para quien no tiene ninguna. WalletConnect para Solana no se puede activar a la vez que el de EVM en esta versión.
+- El login sigue siendo nuestro: la wallet que Privy conecta firma el reto de la API (`lib/wallet/privyWallets.js`). `ActiveWalletBridge` deja como wallet de las transacciones la de la sesión (`lib/wallet/activeWallet.js`).
+- App ID en `.env.local` del front (`NEXT_PUBLIC_PRIVY_APP_ID`). Probado: la ventana de Privy abre con el App ID real y se cierra junto con la nuestra. Falta que el usuario pruebe un login real (email y MetaMask) y revisar en el panel de Privy los orígenes permitidos para producción.
 
 ## 8. Riesgos de producción
 
