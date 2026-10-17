@@ -13,6 +13,11 @@ export interface NativeCurrency {
   symbol: string;
   name: string;
   decimals: number;
+  /**
+   * Its id at the price source (CoinGecko), e.g. "ethereum", to show its
+   * value in dollars. Absent for currencies with no price, like a local one.
+   */
+  priceId?: string;
 }
 
 interface BaseChainConfig {
@@ -59,6 +64,8 @@ export interface AssetLabel {
   kind: (typeof LABELLED_ASSET_KINDS)[number];
   issuer: string | null;
   canFreeze: boolean;
+  /** Its id at the price source (CoinGecko). Stablecoins without one count as $1. */
+  priceId: string | null;
 }
 
 /** An EVM chain, with the Launchpad contracts to read, if it has any. */
@@ -192,11 +199,15 @@ function parseAssetLabels(
     if (item.canFreeze !== undefined && typeof item.canFreeze !== 'boolean') {
       fail(`${where}.canFreeze must be true or false`);
     }
+    if (item.priceId != null && typeof item.priceId !== 'string') {
+      fail(`${where}.priceId must be text`);
+    }
     return {
       address: lowerAddress(item.address as string),
       kind: kind as AssetLabel['kind'],
       issuer: (item.issuer as string | undefined) || null,
       canFreeze: item.canFreeze === true,
+      priceId: (item.priceId as string | undefined) || null,
     };
   });
 }
@@ -222,10 +233,15 @@ function parseNativeCurrency(
   if (!isCount(decimals) || (decimals as number) > 36) {
     fail('nativeCurrency.decimals must be a number from 0 to 36');
   }
+  const { priceId } = raw as Entry;
+  if (priceId !== undefined && (typeof priceId !== 'string' || !priceId)) {
+    fail('nativeCurrency.priceId must be text');
+  }
   return {
     symbol: symbol as string,
     name: typeof name === 'string' && name ? name : (symbol as string),
     decimals: decimals as number,
+    ...(priceId ? { priceId: priceId as string } : {}),
   };
 }
 

@@ -29,6 +29,28 @@ export function toUserSummary(user: User): UserSummary {
   };
 }
 
+/**
+ * The signed-in user's own profile: also every wallet of the account. Only
+ * shown to themselves: listing them publicly would tell anyone which wallets
+ * belong to the same person.
+ */
+export interface OwnProfile extends UserProfile {
+  wallets: { family: Wallet['family']; address: string; isPrimary: boolean }[];
+}
+
+export function toOwnProfile(user: User & { wallets: Wallet[] }): OwnProfile {
+  return {
+    ...toUserProfile(user),
+    wallets: [...user.wallets]
+      .sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary))
+      .map(({ family, address, isPrimary }) => ({
+        family,
+        address,
+        isPrimary,
+      })),
+  };
+}
+
 export function toUserProfile(user: User & { wallets: Wallet[] }): UserProfile {
   const primaryWallet =
     user.wallets.find((wallet) => wallet.isPrimary) ?? user.wallets[0];

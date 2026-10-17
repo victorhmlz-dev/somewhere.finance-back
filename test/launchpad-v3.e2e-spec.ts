@@ -76,12 +76,14 @@ describe('Launchpad v3 (e2e)', () => {
               kind: 'stablecoin',
               issuer: 'Circle',
               canFreeze: true,
+              priceId: null,
             },
             {
               address: stock.toLowerCase() as Hex,
               kind: 'stock',
               issuer: 'Robinhood',
               canFreeze: true,
+              priceId: null,
             },
           ]
         : [],
@@ -418,10 +420,12 @@ describe('Launchpad v3 (e2e)', () => {
       .get(`/launches/tickers/${symbol.toLowerCase()}`)
       .expect(200);
     expect(response.body.symbol).toBe(symbol);
-    expect(
-      response.body.launches.map((use: { chainKey: string }) => use.chainKey),
-    ).toEqual([chainKey, otherChainKey]);
-    expect(response.body.launches[1]).toMatchObject({
+    // Both created in the same block: in no particular order
+    const uses = response.body.launches as { chainKey: string }[];
+    expect(uses.map((use) => use.chainKey).sort()).toEqual(
+      [chainKey, otherChainKey].sort(),
+    );
+    expect(uses.find((use) => use.chainKey === otherChainKey)).toMatchObject({
       chainName: 'Other chain',
       status: 'live',
     });

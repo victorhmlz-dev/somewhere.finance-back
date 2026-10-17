@@ -19,6 +19,8 @@ describe('validateEnv', () => {
       UPLOAD_DAILY_LIMIT: 30,
       RATE_LIMIT_ENABLED: true,
       TRUST_PROXY: 0,
+      // Without it, users sign in with a wallet signature only
+      PRIVY_APP_ID: null,
     });
   });
 

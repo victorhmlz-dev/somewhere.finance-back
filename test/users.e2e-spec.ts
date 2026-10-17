@@ -62,12 +62,16 @@ describe('Users (e2e)', () => {
   describe('profile', () => {
     it('shows a profile to anyone, by handle in any case', async () => {
       const { user } = await newUser();
+      // Only the user sees the list of their wallets; others, the main one
+      const { wallets: _wallets, ...publicProfile } = user as typeof user & {
+        wallets?: unknown;
+      };
 
       const response = await api()
         .get(`/users/${user.handle.toUpperCase()}`)
         .expect(200);
       expect(response.body).toEqual({
-        ...user,
+        ...publicProfile,
         followingCount: 0,
         followersCount: 0,
         isFollowing: false,

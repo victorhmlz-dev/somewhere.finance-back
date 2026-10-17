@@ -1,19 +1,28 @@
 import { randomBytes } from 'node:crypto';
 import {
   BadRequestException,
+  ConflictException,
+  Inject,
   Injectable,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import type { JWTVerifyGetKey } from 'jose';
 import { generateSiweNonce } from 'viem/siwe';
 import type { Env } from '../config/env.js';
 import type { WalletFamily } from '../generated/prisma/enums.js';
 import { isUniqueViolation } from '../prisma/prisma-errors.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { toUserProfile } from '../users/user-profile.js';
+import { toOwnProfile } from '../users/user-profile.js';
 import { RequestChallengeDto } from './dto/request-challenge.dto.js';
 import { VerifySignatureDto } from './dto/verify-signature.dto.js';
+import {
+  PRIVY_KEYS,
+  type PrivyIdentity,
+  verifyPrivyIdentityToken,
+} from './privy-identity.js';
 import {
   buildSignInMessage,
   normalizeAddress,
@@ -30,6 +39,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService<Env, true>,
+    @Inject(PRIVY_KEYS) private readonly privyKeys: JWTVerifyGetKey | null,
   ) {}
 
   async createChallenge(dto: RequestChallengeDto) {
@@ -100,7 +110,94 @@ export class AuthService {
     );
     const accessToken = await this.jwt.signAsync({ sub: user.id });
 
-    return { accessToken, user: toUserProfile(user) };
+    return { accessToken, user: toOwnProfile(user) };
+  }
+
+  /**
+   * Signs in with the identity token of a Privy user, with no message to
+   * sign: Privy already checked the user and their wallets.
+   */
+  async signInWithPrivy(identityToken: string) {
+    const appId = this.config.get('PRIVY_APP_ID', { infer: true });
+    if (!appId || !this.privyKeys) {
+      throw new ServiceUnavailableException('Sign-in with Privy is not set up');
+    }
+    const identity = await verifyPrivyIdentityToken(
+      identityToken,
+      appId,
+      this.privyKeys,
+    );
+    if (!identity) {
+      throw new UnauthorizedException('Invalid or expired Privy token');
+    }
+
+    const userId = await this.userIdForIdentity(identity);
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      include: { wallets: true },
+    });
+    const accessToken = await this.jwt.signAsync({ sub: user.id });
+    return { accessToken, user: toOwnProfile(user) };
+  }
+
+  /**
+   * The account of a Privy user. The first time, it is the account that
+   * already has one of their wallets (in Privy's order), so someone who used
+   * Somewhere with MetaMask keeps their account; or a new one. Every linked
+   * wallet that no account has yet joins it. A wallet of another account
+   * stays where it is: accounts are never merged without the user asking.
+   */
+  private async userIdForIdentity(identity: PrivyIdentity): Promise<string> {
+    const key = { provider: 'privy', subject: identity.subject };
+    const known = await this.prisma.authIdentity.findUnique({
+      where: { provider_subject: key },
+    });
+
+    let userId = known?.userId;
+    if (!userId) {
+      if (identity.wallets.length === 0) {
+        // An email sign-up whose wallet Privy has not created yet
+        throw new ConflictException(
+          'Your wallet is still being created. Try again in a moment.',
+        );
+      }
+      const owners = await this.prisma.wallet.findMany({
+        where: { OR: identity.wallets },
+      });
+      const owner = identity.wallets
+        .map((wallet) =>
+          owners.find(
+            (item) =>
+              item.family === wallet.family && item.address === wallet.address,
+          ),
+        )
+        .find(Boolean);
+      // EVM first: launches live on EVM chains for now
+      const primary =
+        identity.wallets.find((wallet) => wallet.family === 'evm') ??
+        identity.wallets[0];
+      userId =
+        owner?.userId ??
+        (await this.findOrCreateUser(primary.family, primary.address)).id;
+
+      try {
+        await this.prisma.authIdentity.create({ data: { ...key, userId } });
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+        // A concurrent sign-in of the same user linked it first
+        userId = (
+          await this.prisma.authIdentity.findUniqueOrThrow({
+            where: { provider_subject: key },
+          })
+        ).userId;
+      }
+    }
+
+    await this.prisma.wallet.createMany({
+      data: identity.wallets.map((wallet) => ({ ...wallet, userId })),
+      skipDuplicates: true,
+    });
+    return userId;
   }
 
   private async findOrCreateUser(family: WalletFamily, address: string) {

@@ -203,7 +203,8 @@ export class LaunchesService {
           { cancelledAt: null },
         ],
       },
-      orderBy: { createdAt: 'asc' },
+      // The same block gives the same time: the id breaks the tie
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     const launches = rows
       .map((launch) => ({

@@ -267,11 +267,21 @@ Primer paso del requisito vital de la decisión 8:
 
 ## 7d. Launchpad v3 en el back y el front (2026-10-16)
 
-- Contratos: `LaunchpadV3`, `TokenSaleV3`, `CreatorVestingV3` (ver `somewhere.finance-contracts/docs/ARCHITECTURE.md`, sección 13). Sin desplegar todavía en Sepolia; módulo `ignition/modules/LaunchpadV3.ts`, parámetros `sepolia-v3.json` y script `scripts/allow-quote-assets.ts`.
+- Contratos: `LaunchpadV3`, `TokenSaleV3`, `CreatorVestingV3` (ver `somewhere.finance-contracts/docs/ARCHITECTURE.md`, sección 13). Desplegada en Sepolia el 2026-10-16: `0x0EB8Cd03C0544943C1256bbFfF61A44155C32B97`, bloque 11923771, con ETH y el USDC de Circle permitidos. El `.env` del back ya la lista tras la v2 en `CHAINS`.
 - Back: `CHAINS` admite `launchpads: [{ address, version, startBlock }]` y `assets` (etiquetas de tokens). Un cursor por red y contrato; los activos permitidos salen de `QuoteAssetUpdated` (`launchpad_quote_assets`); WETH se muestra como la moneda nativa. `GET /api/launches/tickers/:symbol` dice qué lanzamientos de cualquier red usan un ticker. Migración `20261016180000_launchpad_v3`, sin borrar datos.
 - Front: compra con `permit` (una firma) si el token lo admite (EIP-5267), si no aprobación exacta y compra; con moneda nativa, `contributeNative`. Formulario con el activo sugerido (stablecoins primero), el mínimo de cada activo, tickers A–Z/0–9 y aviso de tickers usados en otras redes; aviso de emisores que pueden congelar.
 - Probado en local de punta a punta en el navegador: compra en MUSD con permit, aviso de saldo, creación v3 en ETH, compra con devolución del sobrante, listado y reclamo.
-- Pendiente: desplegar la v3 en Sepolia (paso del usuario) y añadirla a `CHAINS` tras la v2; probar la aprobación en dos pasos con el USDC de Sepolia si no expone `eip712Domain`; precios en dólares.
+- Pendiente: probar la aprobación en dos pasos con el USDC de Sepolia si no expone `eip712Domain`; precios en dólares.
+
+## 7e. Login de un paso, saldos en dólares y compra en una firma (2026-10-16)
+
+- Decisión 16 (2026-10-16): más adelante, compra de cripto con una pasarela de pago FIAT.
+- Compra con una sola firma: el front deduce el dominio EIP-712 de tokens sin EIP-5267 (como el USDC de Circle) comparándolo con su `DOMAIN_SEPARATOR`; verificado con un `permit` simulado contra el USDC de Sepolia.
+- Login sin segunda firma: `POST /api/auth/privy` con el identity token de Privy (verificado con su JWKS, sin App Secret). Tabla `auth_identities` (solo el id de Privy). La cuenta es nuestra: la primera vez se une a la cuenta que ya tenga una de sus wallets; las wallets vinculadas libres se añaden (varias wallets por cuenta). `GET /api/auth/me` devuelve `wallets` solo al propio usuario. Hay que activar los identity tokens en el panel de Privy. La ruta de firma (`challenge`/`verify`) sigue para otros clientes.
+- Ventana de Privy con el tema de Somewhere (logo, textos, variables CSS en `styles/components/layout/privy-modal.css`).
+- Saldos: `GET /api/balances` (nativa, tokens registrados y tokens de lanzamientos listados en los que participó la cuenta; dólares por CoinGecko con `priceId`, stablecoins a 1 $, tokens listados por las reservas de su par; indicador de gas por red). En el front: total en la caja de la cuenta de la barra lateral, en "Your account" (con avisos de gas) y la pestaña Balances del perfil con datos reales.
+- Parche de Privy 3.46.0 con `patch-package` (`somewhere.finance-front/patches/`, aplicado en `postinstall`): `key` del botón "Last used" de la pantalla de login y atributos SVG en camelCase del icono de X. Ninguna versión hasta la 3.49.1 lo corrige. Al subir de versión de Privy hay que rehacer o quitar el parche (patch-package avisa si no encaja).
+- Pendiente de aprobar: keeper que lista las ventas con una comisión preaprobada por el creador al crear el lanzamiento (cambio de contrato, v3.1).
 
 ## 8. Riesgos de producción
 

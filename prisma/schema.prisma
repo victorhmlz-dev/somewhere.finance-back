@@ -42,6 +42,7 @@ model User {
   reactions Reaction[]
   uploads   Upload[]
 
+  identities           AuthIdentity[]
   pendingLaunchDetails PendingLaunchDetails[]
   reposts              Repost[]
   notifications        Notification[]         @relation("received")
@@ -296,6 +297,26 @@ model PendingLaunchDetails {
 
 // One row per sign-in attempt: the exact message the wallet has to sign.
 // A challenge is valid once and only until it expires.
+// A way to sign in that is not a wallet signature: today, a Privy user. The
+// account is ours; Privy is one way into it, so it can be replaced or joined
+// by another provider without losing anything. Only the provider's id of the
+// user is kept: no email, no phone, nothing else about them.
+model AuthIdentity {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  // "privy".
+  provider  String   @db.VarChar(32)
+  // The provider's id of the user, e.g. "did:privy:…".
+  subject   String   @db.VarChar(128)
+  userId    String   @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, subject])
+  @@index([userId])
+  @@map("auth_identities")
+}
+
 model AuthChallenge {
   id        String       @id @default(uuid(7)) @db.Uuid
   nonce     String       @unique @db.VarChar(96)

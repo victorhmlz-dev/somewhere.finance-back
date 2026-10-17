@@ -24,6 +24,11 @@ export interface Env {
    * address is read from X-Forwarded-For, skipping that many hops.
    */
   TRUST_PROXY: number;
+  /**
+   * The Privy app whose identity tokens sign users in (public, the same the
+   * front uses). Null to sign in only with a wallet signature.
+   */
+  PRIVY_APP_ID: string | null;
 }
 
 const ONE_WEEK_IN_SECONDS = 60 * 60 * 24 * 7;
@@ -105,5 +110,9 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     UPLOAD_DAILY_LIMIT: uploadDailyLimit,
     RATE_LIMIT_ENABLED: rateLimit === 'true',
     TRUST_PROXY: trustProxy,
+    PRIVY_APP_ID:
+      typeof raw.PRIVY_APP_ID === 'string' && raw.PRIVY_APP_ID.trim()
+        ? raw.PRIVY_APP_ID.trim()
+        : null,
   };
 }

@@ -121,6 +121,7 @@ describe('parseChains', () => {
         kind: 'stablecoin',
         issuer: 'Circle',
         canFreeze: true,
+        priceId: null,
       },
     ]);
   });

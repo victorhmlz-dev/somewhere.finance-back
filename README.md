@@ -57,6 +57,17 @@ src/health/            Comprobación de estado
 test/                  Tests e2e
 ```
 
+## Login con Privy
+
+El front entra con Privy (email o cualquier wallet) y manda su *identity token*: `POST /api/auth/privy` con `{ "identityToken": "..." }`. Devuelve `{ accessToken, user }`, sin ningún mensaje que firmar.
+
+- La API comprueba la firma del token con las claves públicas de Privy (`https://auth.privy.io/api/v1/apps/<app>/jwks.json`), su emisor (`privy.io`), su audiencia (`PRIVY_APP_ID`) y su caducidad. No necesita el App Secret.
+- De Privy solo se guarda su id del usuario (`auth_identities`). Ni email ni nada más.
+- La cuenta es de Somewhere y Privy es una forma de entrar en ella. La primera vez se usa la cuenta que ya tenga alguna de sus wallets (así quien entraba con MetaMask conserva la suya) o se crea una. Las wallets vinculadas en Privy que no tiene nadie se añaden a la cuenta; una wallet de otra cuenta se queda donde está, porque nunca se fusionan cuentas sin que el usuario lo pida.
+- Si Privy aún está creando la wallet de una cuenta nueva de email, la respuesta es 409 y el front reintenta.
+- En el panel de Privy hay que activar los identity tokens (User management > Authentication > Advanced).
+- `GET /api/auth/me` y el login devuelven además `wallets`, la lista de wallets de la cuenta con la principal primero. El perfil público solo muestra la principal: listarlas todas diría a cualquiera qué wallets son de la misma persona.
+
 ## Login por wallet
 
 1. `POST /api/auth/challenge` con `{ "family": "evm" | "solana", "address": "...", "chainId": 1 }` (`chainId` es opcional y solo aplica a EVM). Devuelve `{ nonce, message, expiresAt }`.
@@ -296,6 +307,16 @@ Los tokens se registran la primera vez que un evento los nombra. Si dos procesos
 Cada vez que se reinicia la cadena local empieza de cero, y hay que borrar lo indexado de la anterior: `npm run launchpad:reset -- local`. El script solo borra la copia de la cadena y se niega a funcionar con `NODE_ENV=production`.
 
 Si cambia un evento de los contratos, `npm run abi:sync` regenera `src/launchpad/abi.ts` a partir de los contratos compilados.
+
+## Saldos
+
+`GET /api/balances` (con sesión) devuelve lo que tienen las wallets EVM de la cuenta en cada red configurada, leído de la cadena (se reutiliza 30 segundos y nunca se guarda):
+
+- `items`: cada activo con su cantidad y su valor en dólares (`usd`, null si no hay precio). Siempre la moneda nativa de cada red, los tokens registrados con saldo y los tokens de lanzamientos listados en los que la cuenta participó, enlazados a su lanzamiento.
+- `gas`: si cada wallet puede pagar las comisiones de cada red: `level` (`ok`, `low`, `empty`), cuántas acciones cubre aproximadamente (250.000 de gas cada una al precio actual) y cuánto conviene tener (10 acciones).
+- `totalUsd`, y `unavailable` con las redes que no respondieron.
+
+Los dólares solo sirven para mostrar; nada en la cadena depende de ellos. Las stablecoins valen 1 dólar. La moneda nativa y los activos con `priceId` (en `nativeCurrency.priceId` y `assets[].priceId` de `CHAINS`, ids de CoinGecko como `ethereum`) usan el precio de CoinGecko, guardado un minuto; si no responde, se usa el último conocido. Un token listado vale lo que dicen las reservas de su par en el exchange. Las acciones tokenizadas aún no tienen fuente de precio.
 
 ## Imágenes
 

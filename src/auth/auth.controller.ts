@@ -9,11 +9,12 @@ import {
 } from '@nestjs/common';
 import { LimitPerMinute, RATE_LIMITS } from '../common/rate-limits.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { toUserProfile } from '../users/user-profile.js';
+import { toOwnProfile } from '../users/user-profile.js';
 import { AuthGuard, type AuthenticatedUser } from './auth.guard.js';
 import { AuthService } from './auth.service.js';
 import { CurrentUser } from './current-user.decorator.js';
 import { RequestChallengeDto } from './dto/request-challenge.dto.js';
+import { PrivySignInDto } from './dto/privy-sign-in.dto.js';
 import { VerifySignatureDto } from './dto/verify-signature.dto.js';
 
 @Controller('auth')
@@ -38,6 +39,17 @@ export class AuthController {
     return this.auth.verifySignature(dto);
   }
 
+  /**
+   * Signs in with Privy in one step: its identity token, with no message to
+   * sign. The account is created, or found by one of the user's wallets.
+   */
+  @LimitPerMinute(RATE_LIMITS.signIn)
+  @Post('privy')
+  @HttpCode(200)
+  signInWithPrivy(@Body() dto: PrivySignInDto) {
+    return this.auth.signInWithPrivy(dto.identityToken);
+  }
+
   @Get('me')
   @UseGuards(AuthGuard)
   async me(@CurrentUser() currentUser: AuthenticatedUser) {
@@ -47,6 +59,6 @@ export class AuthController {
     });
     // The token is valid but the account behind it no longer exists.
     if (!user) throw new UnauthorizedException('User no longer exists');
-    return toUserProfile(user);
+    return toOwnProfile(user);
   }
 }
